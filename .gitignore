@@ -1,0 +1,5 @@
+*.json
+*.sqlite
+*.pyc
+/venv
+/.idea
