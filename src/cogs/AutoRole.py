@@ -477,27 +477,30 @@ class AutoRole(commands.Cog):
 
             # TODO: Get current settings
             autoNameChange = False
+            autoRoleChange = False
 
-            add_roles = reactMenu.Page(reactMenu.ResponseType(2), name="Toggle Auto Name Change",
+            name_change = reactMenu.Page(reactMenu.ResponseType(2), name="Toggle Auto Name Change",
                                        body=f"Toggles the auto name change functionality. Currently {autoNameChange}",
                                        additional="Please enter a System Member below:",
                                        callback=self.select_member_for_role)
 
-            add_roles_from_discord_user = reactMenu.Page(reactMenu.ResponseType(1),
-                                                         name="Apply current roles to a member",
-                                                         body="Makes the selected member have the roles currently on your discord account.",
+            role_change = reactMenu.Page(reactMenu.ResponseType(1),
+                                                         name="Toggle Auto Role Change",
+                                                         body=f"Toggles the auto name change functionality. Currently {autoRoleChange}",
                                                          additional="Please enter a System Member below:",
                                                          callback=self.select_member_for_current_roles)
 
-            add_roles_to_all_members = reactMenu.Page(reactMenu.ResponseType(1),
-                                                      name="Add roles to all your members",
-                                                      body="Add any number of roles to all members in your system",
-                                                      additional="Please enter a role below:",
-                                                      callback=self.add_role_to_all_members)
+
+
+            # add_roles_to_all_members = reactMenu.Page(reactMenu.ResponseType(1),
+            #                                           name="Add roles to all your members",
+            #                                           body="Add any number of roles to all members in your system",
+            #                                           additional="Please enter a role below:",
+            #                                           callback=self.add_role_to_all_members)
 
             menu = reactMenu.Menu(name="AutoRole Settings",
                                   body="Please select an option below by sending a message with the number or name",
-                                  pages=[add_roles, add_roles_to_all_members])  # , add_roles_from_discord_user])
+                                  pages=[name_change, role_change])  # , add_roles_from_discord_user])
 
             await menu.run(self.bot, self.ctx)
 
