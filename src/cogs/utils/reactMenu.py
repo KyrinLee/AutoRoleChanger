@@ -18,7 +18,7 @@ class ResponseType(Enum):
     string = 1  # string input
     boolean = 2  # Boolean reaction
     simpleResponse = 3  # non-interactive response message.
-    customResponse = 3  # Allows for a completely custom response. Only calls the callback.
+    customResponse = 4  # Allows for a completely custom response. Only calls the callback.
 
 
 class InvalidInput(Exception):
@@ -33,12 +33,13 @@ class Page:
     LOG = logging.getLogger("PNBot.Page")
 
     def __init__(self, response: ResponseType, name: Optional[str] = None, body: Optional[str] = None,
-                 callback: Callable = do_nothing, additional: str = None):
+                 callback: Callable = do_nothing, additional: str = None, timeout: int = 120.0):
         # self.header_name = header_name
         # self.header_body = header_body
         self.name = name
         self.body = body
         self.additional = additional
+        self.timeout = timeout
 
         self.response_type = response
         self.callback = callback
@@ -89,7 +90,7 @@ class Page:
             return _user == ctx.author and (str(_reaction.emoji) == '✅' or str(_reaction.emoji) == '❌')
 
         try:
-            reaction, react_user = await client.wait_for('reaction_add', timeout=120.0, check=react_check)
+            reaction, react_user = await client.wait_for('reaction_add', timeout=self.timeout, check=react_check)
             if str(reaction.emoji) == '✅':
                 self.response = True
                 await self.callback(self, client, ctx, True)
@@ -128,7 +129,7 @@ class Page:
             return _msg.author == author and _msg.channel == channel
 
         try:
-            msg: discord.Message = await client.wait_for('message', timeout=60.0, check=message_check)
+            msg: discord.Message = await client.wait_for('message', timeout=self.timeout, check=message_check)
             self.response = msg
             await self.callback(self, client, ctx, msg)
 

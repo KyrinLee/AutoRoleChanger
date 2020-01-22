@@ -5,8 +5,9 @@ import functools
 import sqlite3
 
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Iterable
 
+import discord
 import cogs.utils.pluralKit as pk
 
 log = logging.getLogger("RoleChanger.db")
@@ -150,7 +151,7 @@ async def update_member(db: str, pk_sid: str, pk_mid: str, member_name: str, fro
 
 
 # --- Get Member(s) --- #
-members_map = ["pk_mid", "pk_sid", "member_name", "fronting", "last_update"]
+members_map = ["pk_sid", "pk_mid", "member_name", "fronting", "last_update"]
 @db_deco
 async def get_members_by_pk_sid(db: str, pk_sid: str) -> List[Dict]:
     async with aiosqlite.connect(db) as conn:
@@ -184,6 +185,7 @@ async def get_members_by_discord_account(db: str, discord_user_id: int) -> List[
 @db_deco
 async def get_members_by_discord_account_if_ood(db: str, discord_user_id: int, older_than: int = 86400)-> Optional[List[Dict]]:
     async with aiosqlite.connect(db) as conn:
+        # dict_map = []
         time = datetime.utcnow().timestamp() - older_than
         log.info(f"time: {time}")
         cursor = await conn.execute("""
@@ -192,7 +194,7 @@ async def get_members_by_discord_account_if_ood(db: str, discord_user_id: int, o
                                         INNER JOIN accounts on accounts.pk_sid = members.pk_sid
                                         WHERE accounts.dis_uid = ? and members.last_update < ?""", (discord_user_id, time))
         raw_rows = await cursor.fetchall()
-        rows = [dict(zip(ood_sys_map, row)) for row in raw_rows]
+        rows = [dict(zip(ood_sys_map, row)) for row in raw_rows]  # FIXME: The map is wrong.
         if len(rows) == 0:
             return None
         else:
@@ -223,8 +225,8 @@ async def get_fronting_members_by_discord_account(db: str, discord_user_id: int)
                                     SELECT members.pk_mid, members.pk_sid
                                     from members
                                     INNER JOIN accounts on accounts.pk_sid = members.pk_sid
-                                    WHERE accounts.dis_uid = ? and members.last_update < ? and members.fronting = 1""",
-                        (discord_user_id, time))
+                                    WHERE accounts.dis_uid = ? and members.fronting = 1""",
+                                    (int(discord_user_id), ))
         raw_rows = await cursor.fetchall()
         # rows = [dict(zip(members_map, row)) for row in raw_rows]
         rows = []
@@ -240,7 +242,7 @@ async def get_fronting_members_by_discord_account(db: str, discord_user_id: int)
 async def get_member_by_mid_and_discord_account(db: str, pk_mid: str, discord_user_id: int) -> Optional[Dict]:
     async with aiosqlite.connect(db) as conn:
         cursor = await conn.execute("""
-                                    SELECT members.pk_sid, members.pk_mid, members.member_name, members.fronting, members.last_update
+                                    SELECT members.pk_sid,  members.pk_mid, members.member_name, members.fronting, members.last_update
                                     from members
                                     INNER JOIN accounts on accounts.pk_sid = members.pk_sid
                                     WHERE accounts.dis_uid = ? and members.pk_mid = ?
@@ -368,6 +370,157 @@ async def get_roles_for_member(db: str, pk_mid: str) -> Optional[List[Dict]]:
             return None
         return rows
 
+# --- Settings --- #
+
+
+class AllowableRoles:
+    role_ids: List[int]
+    guild_id: int
+    roles: Optional[List[discord.Role]]
+    row_map = ['role_id', 'guild_id']
+
+    def __init__(self, rows: Iterable[aiosqlite.Row]):
+        self.guild_id: int = rows[0][1]  # Guild ID will be the same for every role, so just set it from the first
+        self.role_ids = [row[0] for row in rows]
+
+    def allowed_intersection(self, other_roles: List[discord.Role]):
+        """ returns list of allowed discord role objects """
+        good_roles = []
+        for other_role in other_roles:  # Loop through all the other roles.
+            for allowed_role_id in self.role_ids:
+                if allowed_role_id == other_role.id:
+                    good_roles.append(other_role)
+                    break
+
+        return good_roles
+
+    def disallowed_intersection(self, other_roles: List[discord.Role]):
+        """ returns list of disallowed discord role objects """
+        bad_roles = []
+        for other_role in other_roles:  # Loop through all the other roles.
+            allowed = False
+            for allowed_role_id in self.role_ids:
+                if allowed_role_id == other_role.id:
+                    allowed = True
+                    break
+
+            if not allowed:
+                bad_roles.append(other_role)
+
+        return bad_roles
+
+
+class UserSettings:
+    pk_sid: str
+    guild_id: int
+    name_change: bool
+    role_change: bool
+    row_map = ['pk_sid', 'guild_id', 'name_change', 'role_change']
+
+    def __init__(self, row: aiosqlite.Row):
+        self.pk_sid: str = row[0]
+        self.guild_id: int = row[1]
+        self.name_change: bool = bool(row[2])
+        self.role_change: bool = bool(row[3])
+
+
+@db_deco
+async def add_allowable_role(db: str, guild_id: int, role_id: int):
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute(
+            "INSERT or ignore INTO allowable_roles(role_id, guild_id) VALUES(?, ?)",
+            (role_id, guild_id))
+        await conn.commit()
+
+# We don't really NEED add_user_settings if we just use update_user_setting instead.
+# @db_deco
+# async def add_user_setting(db: str, pk_sid: str, guild_id: int, name_change: bool, role_change: bool):
+#     async with aiosqlite.connect(db) as conn:
+#         await conn.execute(
+#             "INSERT INTO user_settings(pk_sid, guild_id, name_change, role_change) VALUES(?, ?, ?, ?)",
+#             (pk_sid, guild_id, name_change, role_change))
+#         await conn.commit()
+#
+
+
+@db_deco
+async def update_user_setting(db: str, pk_sid: str, guild_id: int, name_change: bool, role_change: bool):
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute(
+            """insert or ignore into user_settings(pk_sid, guild_id, name_change, role_change) VALUES(?, ?, ?, ?)""",
+            (pk_sid, guild_id, name_change, role_change))
+
+        await conn.execute(
+            """UPDATE user_settings
+               SET name_change = ?, role_change = ?
+               WHERE pk_sid = ? AND guild_id = ?""",
+            (name_change, role_change, pk_sid, guild_id))
+        await conn.commit()
+
+
+@db_deco
+async def get_allowable_roles(db: str, guild_id: int) -> Optional[AllowableRoles]:
+    async with aiosqlite.connect(db) as conn:
+        cursor = await conn.execute(" SELECT * from allowable_roles where guild_id = ?", (guild_id,))
+        raw_rows = await cursor.fetchall()
+
+        if len(raw_rows) == 0:
+            return None
+        allowable_roles = AllowableRoles(raw_rows)
+        return allowable_roles
+
+
+@db_deco
+async def get_user_settings(db: str, pk_sid: str, guild_id: int) -> Optional[UserSettings]:
+    async with aiosqlite.connect(db) as conn:
+        cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? AND guild_id = ? COLLATE NOCASE", (pk_sid, guild_id))
+        raw_row = await cursor.fetchone()
+        if raw_row is None:
+            return None
+        user_settings = UserSettings(raw_row)
+        return user_settings
+
+
+@db_deco
+async def get_user_settings_from_discord_id(db: str, discord_user_id: str, guild_id: int) -> Optional[UserSettings]:
+    async with aiosqlite.connect(db) as conn:
+        # cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? AND guild_id = ? COLLATE NOCASE", (pk_sid, guild_id))
+        cursor = await conn.execute("""
+                                    SELECT *
+                                    from user_settings
+                                    INNER JOIN accounts on accounts.pk_sid = user_settings.pk_sid
+                                    WHERE accounts.dis_uid = ? AND user_settings.guild_id = ?
+                                    """, (discord_user_id, guild_id))
+        raw_row = await cursor.fetchone()
+        if raw_row is None:
+            return None
+        user_settings = UserSettings(raw_row)
+        return user_settings
+
+
+@db_deco
+async def remove_allowable_role(db: str, guild_id: int, role_id: int):
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute(
+            "DELETE FROM allowable_roles WHERE guild_id = ? and role_id = ?",
+            (guild_id, role_id))
+        await conn.commit()
+
+
+@db_deco
+async def remove_user_settings(db: str, pk_sid: str, guild_id: int):
+    async with aiosqlite.connect(db) as conn:
+        # await conn.execute(
+        #     "DELETE FROM roles WHERE pk_mid = ? and role_id = ? and guild_id = ?",
+        #     (pk_mid, role_id, guild_id))
+        # await conn.commit()
+
+        # This will be implemented when we support removing users when they delete their account or leave the guild.
+        raise NotImplementedError
+
+
+
+
 # --- Updates --- #
 
 
@@ -429,29 +582,23 @@ async def create_tables(db: str):
                                     ON DELETE CASCADE
                               );
                         ''')
-        #
-        # await conn.execute('''
-        #                        CREATE TABLE if not exists fronters  (
-        #                        id                   SERIAL primary key,
-        #                        pk_sid               TEXT NOT NULL,
-        #                        pk_mid               TEXT not null,
-        #                        CONSTRAINT fk_fronter_mem
-        #                             FOREIGN KEY (pk_mid)
-        #                             REFERENCES members(pk_mid)
-        #                             ON DELETE CASCADE
-        #                       );
-        #                 ''')
+
+        await conn.execute('''
+                               CREATE TABLE if not exists allowable_roles  (
+                               role_id              bigint NOT NULL,
+                               guild_id             bigint not null,
+                               PRIMARY KEY (role_id, guild_id)
+                            );
+                        ''')
+
+        await conn.execute('''
+                               CREATE TABLE if not exists user_settings  (
+                               pk_sid               TEXT NOT NULL,
+                               guild_id             bigint not null,
+                               name_change          boolean default FALSE,
+                               role_change          boolean default TRUE,
+                               PRIMARY KEY (pk_sid, guild_id)
+                            );
+                        ''')
 
         await conn.execute("PRAGMA foreign_keys = 1")
-
-        # await conn.execute('''
-        #                        CREATE TABLE if not exists rule_confirmations (
-        #                        member_id        BIGINT NOT NULL,
-        #                        guild_id         BIGINT NOT NULL,
-        #                        question_number  INT,
-        #                        paused           BOOLEAN,
-        #                        interview_type   TEXT,
-        #                        user_name        TEXT NOT NULL,
-        #                        content          TEXT DEFAULT NULL
-        #                    );
-        #                     ''')
