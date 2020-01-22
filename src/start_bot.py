@@ -21,10 +21,10 @@ if __name__ == '__main__':
                 case_insensitive=True)
 
     bot.db = config['db_address']
-    bot.command_prefix = "lb;"
+    bot.command_prefix = config['bot_prefix']
 
     asyncio.get_event_loop().run_until_complete(db.create_tables(bot.db))
 
     bot.load_cogs()
-    bot.run(config['luna_token'])
+    bot.run(config['arc_token'])
 

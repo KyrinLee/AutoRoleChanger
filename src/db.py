@@ -54,9 +54,6 @@ async def add_new_system(db: str, pk_sid: str, system_name: str, current_fronter
         await conn.commit()
 
 
-
-
-
 @db_deco
 async def add_linked_discord_account(db: str, pk_sid: str, dis_uid: int):
     async with aiosqlite.connect(db) as conn:
@@ -81,6 +78,19 @@ async def get_system_id_from_linked_account(db: str, dis_uid: int) -> Optional:
             return row
         else:
             return None
+
+
+async def get_all_linked_accounts(db: str, pk_sid: str) -> Optional[List[int]]:
+    async with aiosqlite.connect(db) as conn:
+        cursor = await conn.execute("""SELECT dis_uid
+                                       from accounts WHERE pk_sid = ?""", (pk_sid,))
+        raw_rows = await cursor.fetchall()
+
+        if len(raw_rows) > 0:
+            accounts = [row[0] for row in raw_rows]
+            return accounts
+
+        return None
 
 
 ood_sys_map = ['pk_sid', 'pk_token']
@@ -317,12 +327,12 @@ async def get_all_outofdate_members(db: str, older_than: int = 86400)-> Optional
 
 # --- Roles --- #
 @db_deco
-async def add_role_to_member(db: str, guild_id: int, pk_mid: str, role_id: int) -> bool:
+async def add_role_to_member(db: str, guild_id: int, pk_mid: str, pk_sid: str, role_id: int) -> bool:
     async with aiosqlite.connect(db) as conn:
         try:
             await conn.execute(
-                "INSERT INTO roles(pk_mid, role_id, guild_id) VALUES(?, ?, ?)",
-                (pk_mid, role_id, guild_id))
+                "INSERT INTO roles(pk_mid, pk_sid, role_id, guild_id) VALUES(?, ?, ?, ?)",
+                (pk_mid, pk_sid, role_id, guild_id))
             await conn.commit()
         except sqlite3.InterfaceError as e:
             # Could not enter role into DB as it already exists.
@@ -348,7 +358,7 @@ async def remove_role_from_member(db: str, guild_id: int, pk_mid: str, role_id: 
 #         await conn.commit()
 
 
-role_map = ["pk_mid", "role_id", "guild_id"]
+role_map = ["pk_mid", "pk_sid", "role_id", "guild_id"]
 @db_deco
 async def get_roles_for_member_by_guild(db: str, pk_mid: str, guild_id: int) -> Optional[List[Dict]]:
     async with aiosqlite.connect(db) as conn:
@@ -532,7 +542,6 @@ async def remove_user_settings(db: str, pk_sid: str, guild_id: int):
 async def create_tables(db: str):
     async with aiosqlite.connect(db) as conn:
         await conn.execute("PRAGMA foreign_keys = 0")
-        # TODO: Move interview_type over to an int and use an enum?
         await conn.execute('''
                                CREATE TABLE if not exists systems (
                                pk_sid               TEXT PRIMARY KEY,
@@ -573,6 +582,7 @@ async def create_tables(db: str):
         await conn.execute('''
                                CREATE TABLE if not exists roles  (             
                                pk_mid               TEXT NOT NULL,
+                               pk_sid               TEXT NOT NULL,
                                role_id              bigint not null,
                                guild_id             bigint not null, 
                                UNIQUE (pk_mid, role_id),
