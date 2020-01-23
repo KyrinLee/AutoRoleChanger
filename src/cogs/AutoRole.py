@@ -58,7 +58,8 @@ class AutoRoleChanger(commands.Cog):
     async def on_message(self, message: discord.Message):
         author: Union[discord.Member, discord.User] = message.author
         if not author.bot:
-            if message.content.lower().strip().startswith("pk;sw"):
+            msg = message.content.lower().strip()
+            if msg.startswith("pk;sw") or msg.startswith("pk!sw"):
                 await self.info(F"switch detected! Checking for new fronters in 30 seconds. System: {message.author.display_name}")
                 await asyncio.sleep(30)  # Pause to let API catch up
                 await self.info(f"Now checking fronters for {message.author.display_name}, attempting to call: update_only_fronters")
@@ -125,11 +126,11 @@ class AutoRoleChanger(commands.Cog):
                 await db.update_member(self.db, system_id, member.hid, member.name, fronting=fronting)
 
             if previous_fronters != current_fronters.members:
-                await self.info(f"Fronters changed!: Prev: {previous_fronters}, Cur: {current_fronters}")
+                await self.info(f"Fronters changed!: Prev: {previous_fronters},\n Cur: {current_fronters}")
 
                 roles = []
                 for fronter in current_fronters.members:
-                    new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, discord_member.guild.id)
+                    new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now. #discord_member.guild.id)
                     new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
                     roles.extend(new_roles_ids)
 
@@ -159,8 +160,10 @@ class AutoRoleChanger(commands.Cog):
     #                 await self.autochange_discord_user(discord_member, roles, new_name)
     #
     #         # all_roles[setting.guild_id] = roles
+    #
+    #     # await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
 
-        # await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
+
     async def update_only_fronters(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
                                    message: Optional[discord.Message] = None, force_update=False):
         if ctx is not None:
@@ -188,10 +191,10 @@ class AutoRoleChanger(commands.Cog):
 
         if previous_fronters != current_fronters.members or force_update:
             roles = []
-            await self.info(f"Fronters changed!: Prev: {previous_fronters}, Cur: {current_fronters}")
+            await self.info(f"Fronters changed!: Prev: {previous_fronters}, \nCur: {current_fronters}")
 
             for fronter in current_fronters.members:
-                new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, discord_member.guild.id)
+                new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now.# discord_member.guild.id)
                 if new_roles is not None:
                     new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
                     roles.extend(new_roles_ids)
@@ -200,15 +203,31 @@ class AutoRoleChanger(commands.Cog):
             await self.autochange_discord_user(discord_member, roles, new_name)
 
 
-    async def autochange_discord_user(self, discord_member: discord.Member, new_roles: List[Union[discord.Role, discord.Object]], new_name: Optional[str]):
+    async def autochange_discord_user(self, discord_member: Union[discord.Member, discord.User], new_roles: List[Union[discord.Role, discord.Object]], new_name: Optional[str]):
         """Applies the new roles and name to the selected discord user"""
 
-        user_settings = await db.get_user_settings_from_discord_id(self.db, discord_member.id, discord_member.guild.id)
+        # guild: discord.Guild = discord_member.guild
+
+        if discord_member.guild.id in authorized_guilds:
+            guild: discord.Guild = discord_member.guild
+        else:
+            guild: discord.Guild = self.bot.get_guild(authorized_guilds[0])
+            if guild is None:
+                await self.info(f"Could not get guild in autochange_discord_user")
+                return
+
+            member_id = discord_member.id
+            discord_member = guild.get_member(member_id)
+            if discord_member is None:
+                await self.info(f"Could not get discord_member {member_id} in autochange_discord_user")
+                return
+
+        user_settings = await db.get_user_settings_from_discord_id(self.db, discord_member.id, guild.id)  # discord_member.guild.id)
 
         if user_settings.role_change:
             await self.info(f"Setting {new_name}'s {len(new_roles)} role(s) on {discord_member.display_name}")
 
-            guild_allowed_auto_roles = await db.get_allowable_roles(self.db, discord_member.guild.id)
+            guild_allowed_auto_roles = await db.get_allowable_roles(self.db, guild.id)  # discord_member.guild.id)
 
             # Get the auto roles to set and get the roles we must keep
             allowed_new_roles = guild_allowed_auto_roles.allowed_intersection(new_roles)
@@ -961,7 +980,7 @@ class AutoRoleChanger(commands.Cog):
             embed.set_author(name=f"Roles that users may use.")
 
             if self.allowable_roles is not None:
-                roles_msg = "\n".join([f"<@&{role_id}>" for role_id in self.allowable_roles.role_ids])
+                roles_msg = ", ".join([f"<@&{role_id}>" for role_id in self.allowable_roles.role_ids])
             else:
                 roles_msg = "No roles are configured!"
 
