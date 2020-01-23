@@ -115,8 +115,8 @@ class dLogger:
             self.log.exception(f"Error sending log to Discord Channel!: {e}")
             return False
 
-
-    async def send_long_msg(self, channel: discord.TextChannel, message: str, code_block: bool = False,
+    @staticmethod
+    async def send_long_msg(channel: discord.TextChannel, message: str, code_block: bool = False,
                             code_block_lang: str = "python"):# -> Optional[discord.Message]:
 
         if code_block:

@@ -77,7 +77,6 @@ class PNBot(commands.Bot):
             await self.dLog.error(error)
             raise error
 
-
     # @client.event
     async def on_error(self, event_name, *args):
         logging.exception("Exception from event {}".format(event_name))
@@ -105,6 +104,12 @@ class PNBot(commands.Bot):
         await self.dLog.error(traceback_msg2)
 
 
+    async def on_guild_join(self, guild: discord.Guild):
+        log_msg = "Auto Role Changer joined **{} ({})**, owned by:** {} - {}#{} ({})**".format(guild.name, guild.id, guild.owner.display_name, guild.owner.name, guild.owner.discriminator, guild.owner.id)
+        log.warning(log_msg)
+        await self.dLog.warning(log_msg, header=f"[{__name__}]")
+
+
 class Utilities(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -122,4 +127,25 @@ class Utilities(commands.Cog):
 
         link = discord.utils.oauth_url(self.bot.user.id, permissions=perm)
         await ctx.send(link)
+
+        log_msg = f"Invite for Auto Role Changer sent to ** {ctx.author.display_name} - {ctx.author.name}#{ctx.author.discriminator} ({ctx.author.id})**"
+        log.warning(log_msg)
+        await self.bot.dLog.warning(log_msg, header=f"[{__name__}]")
+
+    @commands.is_owner()
+    @commands.command(name="list_guilds", hidden=True)
+    async def list_guilds(self, ctx: commands.Context):
+        ZERO_WIDTH_CHAR = " ‌‌‌ "
+        msg_list = []
+        for guild in self.bot.guilds:
+            log_msg = "Auto Role Changer in Guild **{} ({})**, owned by:** {} - {}#{} ({})**\n".format(guild.name, guild.id,
+                                                                                                   guild.owner.display_name,
+                                                                                                   guild.owner.name,
+                                                                                                   guild.owner.discriminator,
+                                                                                                   guild.owner.id)
+            msg_list.append(log_msg)
+        messages = f"\n{ZERO_WIDTH_CHAR}".join(msg_list)
+
+        await dLogger.send_long_msg(ctx.channel, messages)
+
 

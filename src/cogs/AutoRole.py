@@ -5,7 +5,7 @@
 import asyncio
 import logging
 import re
-from typing import TYPE_CHECKING, Optional, Dict, List
+from typing import TYPE_CHECKING, Optional, Dict, List, Union
 
 import discord
 from discord.ext import tasks, commands
@@ -39,16 +39,18 @@ class AutoRoleChanger(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.content.lower().strip().startswith("pk;sw"):
-            await self.info(F"switch detected! Checking for new fronters in 30 seconds. System: {message.author.display_name}")
-            await asyncio.sleep(30)  # Pause to let API catch up
-            await self.info(f"Now checking fronters for {message.author.display_name}, attempting to call: update_only_fronters")
-            # pk_info = await self.get_pk_system_by_discord_id(message.author.id)
-            # await self.update_system(message=message)
-            await self.update_only_fronters(message=message)
-        else:
-            await self.info(f"Message received from {message.author.display_name}, attempting to call: update_system")
-            await self.update_system(message=message, time_override=60*60)  # Update from any message once an hour (The default time)
+        author: Union[discord.Member, discord.User] = message.author
+        if not author.bot:
+            if message.content.lower().strip().startswith("pk;sw"):
+                await self.info(F"switch detected! Checking for new fronters in 30 seconds. System: {message.author.display_name}")
+                await asyncio.sleep(30)  # Pause to let API catch up
+                await self.info(f"Now checking fronters for {message.author.display_name}, attempting to call: update_only_fronters")
+                # pk_info = await self.get_pk_system_by_discord_id(message.author.id)
+                # await self.update_system(message=message)
+                await self.update_only_fronters(message=message)
+            else:
+                # await self.info(f"Message received from {message.author.display_name}, attempting to call: update_system")
+                await self.update_system(message=message, time_override=60*60)  # Update from any message once an hour (The default time)
 
 
     # async def update_member(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None, message: Optional[discord.Message] = None):
@@ -82,7 +84,7 @@ class AutoRoleChanger(commands.Cog):
 
 
     async def update_system(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
-                            message: Optional[discord.Message] = None, time_override = 86400):
+                            message: Optional[discord.Message] = None, time_override=86400):
         if ctx is not None:
             discord_member: discord.Member = ctx.author
             message: discord.Message = ctx.message
