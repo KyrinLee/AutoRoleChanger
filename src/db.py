@@ -481,7 +481,7 @@ async def get_allowable_roles(db: str, guild_id: int) -> Optional[AllowableRoles
 
 
 @db_deco
-async def get_user_settings(db: str, pk_sid: str, guild_id: int) -> Optional[UserSettings]:
+async def get_user_settings_for_guild(db: str, pk_sid: str, guild_id: int) -> Optional[UserSettings]:
     async with aiosqlite.connect(db) as conn:
         cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? AND guild_id = ? COLLATE NOCASE", (pk_sid, guild_id))
         raw_row = await cursor.fetchone()
@@ -490,6 +490,24 @@ async def get_user_settings(db: str, pk_sid: str, guild_id: int) -> Optional[Use
         user_settings = UserSettings(raw_row)
         return user_settings
 
+
+@db_deco
+async def get_all_user_settings_from_discord_id(db: str, discord_user_id: int) -> Optional[List[UserSettings]]:
+    async with aiosqlite.connect(db) as conn:
+        # cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? COLLATE NOCASE", (pk_sid, ))
+        cursor = await conn.execute("""
+                                    SELECT *
+                                    from user_settings
+                                    INNER JOIN accounts on accounts.pk_sid = user_settings.pk_sid
+                                    WHERE accounts.dis_uid = ?
+                                    """, (discord_user_id, ))
+
+        raw_rows = await cursor.fetchall()
+        if len(raw_rows) == 0:
+            return None
+
+        all_user_settings = [UserSettings(row) for row in raw_rows]
+        return all_user_settings
 
 @db_deco
 async def get_user_settings_from_discord_id(db: str, discord_user_id: str, guild_id: int) -> Optional[UserSettings]:

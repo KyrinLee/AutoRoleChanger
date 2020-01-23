@@ -11,6 +11,7 @@ import discord
 from discord.ext import commands
 from cogs.utils.dLogger import dLogger
 import embeds
+from botExceptions import UnsupportedGuild
 
 log = logging.getLogger("PNBot")
 
@@ -72,10 +73,14 @@ class PNBot(commands.Bot):
             await ctx.send("⚠ {}".format(error))
         elif type(error) == discord.ext.commands.BadArgument:
             await ctx.send("⚠ {}".format(error))
+        elif type(error) == UnsupportedGuild:
+            await ctx.send("⚠ This command is not yet supported outside of Plural Nest.")
+            return
         else:
             await ctx.send("⚠ {}".format(error))
             await self.dLog.error(error)
             raise error
+
 
     # @client.event
     async def on_error(self, event_name, *args):

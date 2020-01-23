@@ -17,17 +17,34 @@ import cogs.utils.pluralKit as pk
 import cogs.utils.reactMenu as reactMenu
 
 from cogs.utils.dLogger import dLogger
+from botExceptions import UnsupportedGuild
 
 if TYPE_CHECKING:
     from discordBot import PNBot
 
 log = logging.getLogger(__name__)
+authorized_guilds = [433446063022538753]
 
 """
 TODO:
     Add System Tag support. Make it a user setting.
     Add proper alt account support. 
 """
+
+
+def is_authorized_guild():
+    async def predicate(ctx):
+
+        if ctx.guild is None:  # Double check that we are not in a DM.
+            raise commands.NoPrivateMessage()
+
+        if ctx.guild.id not in authorized_guilds:
+            raise UnsupportedGuild()
+
+        return True
+
+
+    return commands.check(predicate)
 
 
 class AutoRoleChanger(commands.Cog):
@@ -108,8 +125,9 @@ class AutoRoleChanger(commands.Cog):
                 await db.update_member(self.db, system_id, member.hid, member.name, fronting=fronting)
 
             if previous_fronters != current_fronters.members:
-                roles = []
                 await self.info(f"Fronters changed!: Prev: {previous_fronters}, Cur: {current_fronters}")
+
+                roles = []
                 for fronter in current_fronters.members:
                     new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, discord_member.guild.id)
                     new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
@@ -120,6 +138,29 @@ class AutoRoleChanger(commands.Cog):
                 await self.autochange_discord_user(discord_member, roles, new_name)
 
 
+    # async def get_new_roles_and_name_for_all_guilds(self, current_fronters: pk.Fronters, discord_user_id):
+    #
+    #     settings = await db.get_all_user_settings_from_discord_id(self.db, discord_user_id)
+    #
+    #     all_roles = {}
+    #     new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
+    #     for setting in settings:
+    #         roles = []
+    #         for fronter in current_fronters.members:
+    #             new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, setting.guild_id)
+    #             new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
+    #             roles.extend(new_roles_ids)
+    #
+    #         guild: discord.Guild = await self.bot.get_guild(setting.guild_id)
+    #
+    #         if guild is not None:
+    #             discord_member = await guild.get_member(discord_user_id)
+    #             if discord_member is not None:
+    #                 await self.autochange_discord_user(discord_member, roles, new_name)
+    #
+    #         # all_roles[setting.guild_id] = roles
+
+        # await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
     async def update_only_fronters(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
                                    message: Optional[discord.Message] = None, force_update=False):
         if ctx is not None:
@@ -159,7 +200,7 @@ class AutoRoleChanger(commands.Cog):
             await self.autochange_discord_user(discord_member, roles, new_name)
 
 
-    async def autochange_discord_user(self, discord_member: discord.Member, new_roles: List[discord.Role], new_name: Optional[str]):
+    async def autochange_discord_user(self, discord_member: discord.Member, new_roles: List[Union[discord.Role, discord.Object]], new_name: Optional[str]):
         """Applies the new roles and name to the selected discord user"""
 
         user_settings = await db.get_user_settings_from_discord_id(self.db, discord_member.id, discord_member.guild.id)
@@ -218,6 +259,7 @@ class AutoRoleChanger(commands.Cog):
         await ctx.send("System updated! If your roles and name did not update, please try again in a minute.")
 
 
+    # @is_authorized_guild()
     @commands.guild_only()
     @commands.command(aliases=["list"], brief="See what roles are assigned to your system members.")
     async def list_member_roles(self, ctx: commands.Context):
@@ -240,6 +282,7 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send(f"Could not find {member_input.response.content} in your system.")
 
 
+    # @is_authorized_guild()
     @commands.guild_only()
     @commands.command(aliases=["list_all"], brief="See what roles are assigned to all of your system members.")
     async def list_all_member_roles(self, ctx: commands.Context):
@@ -502,6 +545,7 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send("Finished removing roles!")
 
 
+    @is_authorized_guild()
     @commands.guild_only()
     @commands.command(aliases=["add_roles", "add"], brief="Add roles from system members & See list of roles.",
                       description="Lets you add roles to one or multiple system members.\n"
@@ -783,6 +827,7 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send("Finished adding roles!")
 
 
+    @is_authorized_guild()
     @commands.guild_only()
     @commands.command(aliases=["config", "setting", "user_setting", "user_settings"],
                       brief="Change user settings such as Auto Name Change and Auto Role Change")
@@ -863,6 +908,7 @@ class AutoRoleChanger(commands.Cog):
                 await self.ctx.send(f"Canceled!")
 
 
+    @is_authorized_guild()
     @commands.has_permissions(manage_messages=True)
     @commands.guild_only()
     @commands.command(aliases=["admin_config", "admin_setting", "guild_setting", "guild_settings", "guild_config"],
@@ -1021,6 +1067,7 @@ class AutoRoleChanger(commands.Cog):
             await ctx.send(embed=embed)
 
 
+    @is_authorized_guild()
     @commands.guild_only()
     @commands.command(name="register", aliases=["reg"],
                       brief="<- Start here! Register and link up your PK account.",
@@ -1028,6 +1075,7 @@ class AutoRoleChanger(commands.Cog):
     async def register(self, ctx: commands.Context):
         """Allows you to link your PK account to this bot."""
         # TODO: Add ability to update current registration (Mainly discord accounts)
+
         await ctx.send(f"To register your Plural Kit account, please use the command `pk;s` to have Plural Kit send you system card")
 
         def check_for_pk_response(m: discord.Message):
@@ -1054,7 +1102,7 @@ class AutoRoleChanger(commands.Cog):
         await self.info(f"{system}")
         try:
             members = await self.get_system_members(system_id)
-            await self.info(f"{members}")
+            log.info(f"{members}")
         except MemberListHidden:
             # await ctx.send(f"Your Plural Kit setting require that I get additional information for in order to operate properly.\n"
             #                f"Sending you a DM for further configuration.")
@@ -1064,26 +1112,36 @@ class AutoRoleChanger(commands.Cog):
 
         current_fronters = await self.get_fronters(system_id)
         await self.info(f"{current_fronters}")
-        await self.info(f"adding new system to DB: {system.name}")
+        await self.info(f"adding new system to DB: {system.name} ({system.hid})")
         await db.add_new_system(self.db, system_id, system.name, None, None)
 
         # Add default user settings
         await db.update_user_setting(self.db, system_id, ctx.guild.id, name_change=False, role_change=False)
 
-        await self.info(f"adding linked discord accounts DB: {system.name}")
+        await self.info(f"adding linked discord accounts DB: {system.name}({system.hid})")
 
         for account in pk_info['discord_accounts']:
             await db.add_linked_discord_account(self.db, system_id, int(account))
 
         for member in members:
-            await self.info(f"adding new member to DB: {member.name}")
             fronting = True if member in current_fronters.members else False
             await db.add_new_member(self.db, system_id, member.hid, member.name, fronting=fronting)
+        # await self.info(f"adding the following members to the db: {members}")
         await ctx.send(f"Your system and {len(members)} members of your system have been registered successfully!\n"
                        f"Hidden members are not yet supported.\n\n"
                        f"Auto name and role changing is currently **Off**. You may change these settings by using the **{self.bot.command_prefix}settings** command\n"
                        f"You may set up your system members roles by using the **{self.bot.command_prefix}add_role** command\n"
-                       f"You can see the list of roles by a system member has using the **{self.bot.command_prefix}list_roles** command\n")
+                       f"You can see the list of roles by a system member has using the **{self.bot.command_prefix}list_roles** command\n\n"
+                       f"After everything has been set up, Auto Role Changer SHOULD change your roles and/or account name as configured when it detects a switch.\n")
+
+        await ctx.send(f"Currently Auto ROle Changer check to see if you have switched for the following reasons:\n"
+                       f"30 seconds after using a Plural Kit switch command in a server with Auto Role Changer. (The 30 second delay is to allow account for lag in the Plural Kit API)\n"
+                       f"After a nickname change in a server with Auto Role Changer.\n"
+                       f"Once an hour, but only if you have been talking in the server.\n"
+                       f"When the **{self.bot.command_prefix}update** command has been used.\n"
+                       f"Currently, Roles and Nicknames are only changed on Plural Nest, "
+                       f"however feel free to invite Auto Role Changer to your personal/public server. "
+                       f"This will give you the immediate benefit of those actions described above working for you in other servers.")
 
     async def prompt_for_pk_token(self, ctx: commands.Context):
         author: discord.Member = ctx.author
@@ -1198,3 +1256,5 @@ class UnableToParseSystemCard(Exception):
 
 class MemberListHidden(Exception):
     pass
+
+
