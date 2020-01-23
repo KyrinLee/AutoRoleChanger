@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 from discordBot import PNBot
+from cogs.utils.dLogger import dLogger
 
 import db
 
@@ -22,9 +23,14 @@ if __name__ == '__main__':
 
     bot.db = config['db_address']
     bot.command_prefix = config['bot_prefix']
+    # bot.command_prefix = config['luna_bot_prefix']
+    bot.error_log_channel_id = config['error_log_channel']
+    bot.warning_log_channel_id = config['warning_log_channel']
+    bot.info_log_channel_id = config['info_log_channel']
 
     asyncio.get_event_loop().run_until_complete(db.create_tables(bot.db))
 
     bot.load_cogs()
     bot.run(config['arc_token'])
+    # bot.run(config['luna_token'])
 

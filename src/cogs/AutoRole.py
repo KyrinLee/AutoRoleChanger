@@ -5,16 +5,21 @@
 import asyncio
 import logging
 import re
-from typing import Optional, Dict, List
+from typing import TYPE_CHECKING, Optional, Dict, List
 
 import discord
 from discord.ext import tasks, commands
 
 import aiohttp
+import db
+
 import cogs.utils.pluralKit as pk
 import cogs.utils.reactMenu as reactMenu
 
-import db
+from cogs.utils.dLogger import dLogger
+
+if TYPE_CHECKING:
+    from discordBot import PNBot
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +31,7 @@ TODO:
 
 
 class AutoRoleChanger(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: 'PNBot'):
         self.pk_id = 466378653216014359
         self.db = bot.db
         self.bot = bot
@@ -35,12 +40,14 @@ class AutoRoleChanger(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.content.lower().strip().startswith("pk;sw"):
-            log.info("switch detected!")
+            await self.info(F"switch detected! Checking for new fronters in 30 seconds. System: {message.author.display_name}")
             await asyncio.sleep(30)  # Pause to let API catch up
+            await self.info(f"Now checking fronters for {message.author.display_name}, attempting to call: update_only_fronters")
             # pk_info = await self.get_pk_system_by_discord_id(message.author.id)
             # await self.update_system(message=message)
             await self.update_only_fronters(message=message)
         else:
+            await self.info(f"Message received from {message.author.display_name}, attempting to call: update_system")
             await self.update_system(message=message, time_override=60*60)  # Update from any message once an hour (The default time)
 
 
@@ -74,7 +81,8 @@ class AutoRoleChanger(commands.Cog):
     #                 pass
 
 
-    async def update_system(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None, message: Optional[discord.Message] = None, time_override = 86400):
+    async def update_system(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
+                            message: Optional[discord.Message] = None, time_override = 86400):
         if ctx is not None:
             discord_member: discord.Member = ctx.author
             message: discord.Message = ctx.message
@@ -83,11 +91,11 @@ class AutoRoleChanger(commands.Cog):
             discord_member: discord.Member = message.author
 
         members = await db.get_members_by_discord_account_if_ood(self.db, discord_member.id, time_override)
-        if members is not None:
+        if members is not None and len(members) > 0:
             # log.info(f"updating {members}")
 
             system_id = members[0]['pk_sid']
-            log.info(f"updating {system_id}")
+            await self.info(f"updating {system_id}")
 
             updated_members = await self.get_system_members(system_id)
 
@@ -99,16 +107,19 @@ class AutoRoleChanger(commands.Cog):
 
             if previous_fronters != current_fronters.members:
                 roles = []
-                log.info(f"Fronters changed!: Prev: {previous_fronters}, Cur: {current_fronters}")
+                await self.info(f"Fronters changed!: Prev: {previous_fronters}, Cur: {current_fronters}")
                 for fronter in current_fronters.members:
                     new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, discord_member.guild.id)
                     new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
                     roles.extend(new_roles_ids)
 
-                await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
+                # await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
+                new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
+                await self.autochange_discord_user(discord_member, roles, new_name)
 
 
-    async def update_only_fronters(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None, message: Optional[discord.Message] = None, force_update=False):
+    async def update_only_fronters(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
+                                   message: Optional[discord.Message] = None, force_update=False):
         if ctx is not None:
             discord_member: discord.Member = ctx.author
             message: discord.Message = ctx.message
@@ -126,6 +137,7 @@ class AutoRoleChanger(commands.Cog):
                 return  # No registered account exists.
             system_id = sys_info['pk_system_id']
 
+        # FIXME: This incorrectly will leave the previous fronters still marked as in front.
         current_fronters = await self.get_fronters(system_id)
         for member in current_fronters.members:
             fronting = True
@@ -133,14 +145,16 @@ class AutoRoleChanger(commands.Cog):
 
         if previous_fronters != current_fronters.members or force_update:
             roles = []
-            log.info(f"Fronters changed!: Prev: {previous_fronters}, Cur: {current_fronters}")
+            await self.info(f"Fronters changed!: Prev: {previous_fronters}, Cur: {current_fronters}")
+
             for fronter in current_fronters.members:
                 new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, discord_member.guild.id)
                 if new_roles is not None:
                     new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
                     roles.extend(new_roles_ids)
 
-            await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
+            new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
+            await self.autochange_discord_user(discord_member, roles, new_name)
 
 
     async def autochange_discord_user(self, discord_member: discord.Member, new_roles: List[discord.Role], new_name: Optional[str]):
@@ -149,7 +163,8 @@ class AutoRoleChanger(commands.Cog):
         user_settings = await db.get_user_settings_from_discord_id(self.db, discord_member.id, discord_member.guild.id)
 
         if user_settings.role_change:
-            log.info(f"Setting {new_name}'s {len(new_roles)} role(s) on {discord_member.display_name}")
+            await self.info(f"Setting {new_name}'s {len(new_roles)} role(s) on {discord_member.display_name}")
+
             guild_allowed_auto_roles = await db.get_allowable_roles(self.db, discord_member.guild.id)
 
             # Get the auto roles to set and get the roles we must keep
@@ -158,18 +173,19 @@ class AutoRoleChanger(commands.Cog):
 
             # Use a set to ensure there are no duplicates.
             roles_to_set = set(allowed_new_roles + old_roles_to_keep)
-            log.info(f"Applying the following roles: {roles_to_set}")
+            await self.info(f"Applying the following roles: {roles_to_set}")
+
             try:
                 await discord_member.edit(roles=set(roles_to_set))
             except discord.errors.Forbidden:
-                log.info(f"Could not set roles: {roles_to_set} on {discord_member.display_name}")
+                await self.info(f"Could not set roles: {roles_to_set} on {discord_member.display_name}")
 
-        if user_settings.name_change:
-            log.info(f"Changing {discord_member.display_name} name to {new_name}'s name")
+        if user_settings.name_change and new_name is not None:
+            await self.info(f"Changing {discord_member.display_name} name to {new_name}'s name")
             try:
                 await discord_member.edit(nick=new_name)
             except discord.errors.Forbidden:
-                log.info(f"Could not change {discord_member.display_name}'s name")
+                await self.info(f"Could not change {discord_member.display_name}'s name")
 
 
     @commands.Cog.listener()
@@ -178,9 +194,16 @@ class AutoRoleChanger(commands.Cog):
         event_type_update = "guild_member_update"  # Everything else. Currently unused.
 
         if before.nick != after.nick:
-            log.info(f"{after.nick} changed their nickname from {before.nick}")
+            await self.info(f"{after.nick} changed their nickname from {before.nick}, attempting to call: update_only_fronters")
+
             # Update in nickname change if 5 minutes have passed since the last update.
             await self.update_only_fronters(after)
+
+
+    @commands.is_owner()
+    @commands.command(name="crash")
+    async def crash(self, ctx):
+        assert 1 == 0
 
 
     @commands.guild_only()
@@ -1015,7 +1038,7 @@ class AutoRoleChanger(commands.Cog):
             await ctx.send("Command timed out!")
             return None
 
-        log.info(f"Got PK Embed: {pk_msg.embeds}")
+        await self.info(f"Got PK Embed: {pk_msg.embeds}")
         pk_info = self.parse_system_card(pk_msg.embeds[0])
         system_id = pk_info['system_id']
 
@@ -1026,10 +1049,10 @@ class AutoRoleChanger(commands.Cog):
             return
         log.info(f"{system_id}")
         system = await self.get_system(system_id)
-        log.info(f"{system}")
+        await self.info(f"{system}")
         try:
             members = await self.get_system_members(system_id)
-            log.info(f"{members}")
+            await self.info(f"{members}")
         except MemberListHidden:
             # await ctx.send(f"Your Plural Kit setting require that I get additional information for in order to operate properly.\n"
             #                f"Sending you a DM for further configuration.")
@@ -1038,20 +1061,20 @@ class AutoRoleChanger(commands.Cog):
             return
 
         current_fronters = await self.get_fronters(system_id)
-        log.info(f"{current_fronters}")
-        log.info(f"adding new system to DB: {system.name}")
+        await self.info(f"{current_fronters}")
+        await self.info(f"adding new system to DB: {system.name}")
         await db.add_new_system(self.db, system_id, system.name, None, None)
 
         # Add default user settings
         await db.update_user_setting(self.db, system_id, ctx.guild.id, name_change=False, role_change=False)
 
-        log.info(f"adding linked discord accounts DB: {system.name}")
+        await self.info(f"adding linked discord accounts DB: {system.name}")
 
         for account in pk_info['discord_accounts']:
             await db.add_linked_discord_account(self.db, system_id, int(account))
 
         for member in members:
-            log.info(f"adding new member to DB: {member.name}")
+            await self.info(f"adding new member to DB: {member.name}")
             fronting = True if member in current_fronters.members else False
             await db.add_new_member(self.db, system_id, member.hid, member.name, fronting=fronting)
         await ctx.send(f"Your system and {len(members)} members of your system have been registered successfully!\n"
@@ -1112,7 +1135,7 @@ class AutoRoleChanger(commands.Cog):
     async def get_fronters(self, pk_sys_id: str) -> pk.Fronters:
         try:
             async with aiohttp.ClientSession() as session:
-                log.warning(f"Scraping: {f'https://api.pluralkit.me/s/{pk_sys_id}/fronters'}")
+                await self.warning(f"Scraping: {f'https://api.pluralkit.me/s/{pk_sys_id}/fronters'}")
                 fronters = await pk.Fronters.get_by_hid(session, pk_sys_id)
                 return fronters
         except aiohttp.ClientError as e:
@@ -1122,7 +1145,7 @@ class AutoRoleChanger(commands.Cog):
     async def get_system(self, pk_sys_id: str) -> pk.System:
         try:
             async with aiohttp.ClientSession() as session:
-                log.warning(f"Scraping: {f'https://api.pluralkit.me/s/{pk_sys_id}'}")
+                await self.warning(f"Scraping: {f'https://api.pluralkit.me/s/{pk_sys_id}'}")
                 system = await pk.System.get_by_hid(session, pk_sys_id)
                 return system
         except aiohttp.ClientError as e:
@@ -1132,7 +1155,7 @@ class AutoRoleChanger(commands.Cog):
     async def get_system_by_discord_id(self, discord_user_id: int) -> pk.System:
         try:
             async with aiohttp.ClientSession() as session:
-                log.warning(f"Scraping: {f'https://api.pluralkit.me/a/{discord_user_id}'}")
+                await self.warning(f"Scraping: {f'https://api.pluralkit.me/a/{discord_user_id}'}")
                 system = await pk.System.get_by_account(session, discord_user_id)
                 return system
         except aiohttp.ClientError as e:
@@ -1142,7 +1165,7 @@ class AutoRoleChanger(commands.Cog):
     async def get_system_members(self, pk_sys_id: str) -> pk.Members:
         try:
             async with aiohttp.ClientSession() as session:
-                log.warning(f"Scraping: {f'https://api.pluralkit.me/s/{pk_sys_id}/members'}")
+                await self.warning(f"Scraping: {f'https://api.pluralkit.me/s/{pk_sys_id}/members'}")
                 try:
                     members = await pk.Members.get_by_hid(session, pk_sys_id)
                     return members
@@ -1151,6 +1174,16 @@ class AutoRoleChanger(commands.Cog):
         except aiohttp.ClientError as e:
             log.warning(
                 "Could not connect to PK server with out errors. \n{}".format(e))
+
+    async def info(self, msg):
+        """Info Logger"""
+        log.info(msg)
+        await self.bot.dLog.info(msg, header=f"[{__name__}]")
+
+
+    async def warning(self, msg):
+        log.warning(msg)
+        await self.bot.dLog.warning(msg, header=f"[{__name__}]")
 
 
 def setup(bot):
