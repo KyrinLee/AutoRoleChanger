@@ -63,16 +63,20 @@ class AutoRoleChanger(commands.Cog):
         if not author.bot:
             msg = message.content.lower().strip()
             if msg.startswith("pk;sw") or msg.startswith("pk!sw"):
-                await self.info(F"switch detected! Checking for new fronters in 30 seconds. System: {message.author.display_name}")
+                await self.info(F"PluralKit switch command detected! Checking for new fronters in 30 seconds. System: {message.author.display_name}")
                 await asyncio.sleep(30)  # Pause to let API catch up
                 await self.info(f"Now checking fronters for {message.author.display_name}, attempting to call: update_only_fronters")
                 # pk_info = await self.get_pk_system_by_discord_id(message.author.id)
                 # await self.update_system(message=message)
-                await self.update_only_fronters(message=message)
+                # await self.update_only_fronters(message=message)
+                await self.update_system_members(force_member_update=True, message=message)
             else:
                 # await self.info(f"Message received from {message.author.display_name}, attempting to call: update_system")
-                await self.update_system(message=message, time_override=60*60)  # Update from any message once an hour (The default time)
 
+                # Once an hour, make sure that the entire systems info is updated.
+                # This done based off the last updated time in the DB
+                # await self.update_members(message=message, time_override=60 * 60)
+                await self.update_system_members(db_expiration_age=60*60, message=message) # Update from any message once an hour (The default time)
 
     # async def update_member(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None, message: Optional[discord.Message] = None):
     #     if ctx is not None:
@@ -104,43 +108,56 @@ class AutoRoleChanger(commands.Cog):
     #                 pass
 
 
-    async def update_system(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
-                            message: Optional[discord.Message] = None, time_override=86400):
-        if ctx is not None:
-            discord_member: discord.Member = ctx.author
-            message: discord.Message = ctx.message
-
-        if message is not None:
-            discord_member: discord.Member = message.author
-
-        members = await db.get_members_by_discord_account_if_ood(self.db, discord_member.id, time_override)
-        if members is not None and len(members) > 0:
-            # log.info(f"updating {members}")
-
-            system_id = members[0]['pk_sid']
-            await self.info(f"updating {system_id}")
-
-            updated_members = await self.get_system_members(system_id)
-
-            previous_fronters = await db.get_fronting_members_by_pk_sid(self.db, system_id)
-            current_fronters = await self.get_fronters(system_id)
-            for member in updated_members:
-                fronting = True if member in current_fronters.members else False
-                await db.update_member(self.db, system_id, member.hid, member.name, fronting=fronting)
-
-            if previous_fronters != current_fronters.members:
-                await self.info(f"Fronters changed!: Prev: {previous_fronters},\n Cur: {current_fronters}")
-
-                roles = []
-                for fronter in current_fronters.members:
-                    new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now. #discord_member.guild.id)
-                    if new_roles is not None:
-                        new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
-                        roles.extend(new_roles_ids)
-
-                # await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
-                new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
-                await self.autochange_discord_user(discord_member, roles, new_name)
+    # async def update_members(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
+    #                          message: Optional[discord.Message] = None, time_override=86400):
+    #     """ This method updates the DB with every member of a system (not just the fronting members).
+    #         It is designed to be called fairly often.
+    #
+    #         It checks the last DB update time for the system,
+    #             and only hits the members & fronters API endpoints IF the records are older than time_override.
+    #         This helps to ensure that the PK API is not abused.
+    #         It then checks the fronters reported by PK against the fronters in the Database.
+    #             If they are different, it calls the Discord APIs to change name and roles.
+    #
+    #         Min resource usage:
+    #             One DB Call.
+    #         Max resource usage:
+    #             4 DB Calls.
+    #             2 PK API Calls.
+    #     """
+    #     if ctx is not None:
+    #         discord_member: discord.Member = ctx.author
+    #         message: discord.Message = ctx.message
+    #
+    #     if message is not None:
+    #         discord_member: discord.Member = message.author
+    #
+    #     members = await db.get_members_by_discord_account_if_ood(self.db, discord_member.id, time_override)
+    #     if members is not None and len(members) > 0:
+    #
+    #         system_id = members[0]['pk_sid']
+    #         await self.info(f"updating {system_id}")
+    #
+    #         updated_members = await self.get_system_members(system_id)
+    #
+    #         previous_fronters = await db.get_fronting_members_by_pk_sid(self.db, system_id)
+    #         current_fronters = await self.get_fronters(system_id)
+    #         for member in updated_members:
+    #             fronting = True if member in current_fronters.members else False
+    #             await db.update_member(self.db, system_id, member.hid, member.name, fronting=fronting)
+    #
+    #         if previous_fronters != current_fronters.members:
+    #             await self.info(f"Fronters changed!: Prev: {previous_fronters},\n Cur: {current_fronters}")
+    #
+    #             roles = []
+    #             for fronter in current_fronters.members:
+    #                 new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now. #discord_member.guild.id)
+    #                 if new_roles is not None:
+    #                     new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
+    #                     roles.extend(new_roles_ids)
+    #
+    #             new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
+    #             await self.autochange_discord_user(discord_member, roles, new_name)
 
 
     # async def get_new_roles_and_name_for_all_guilds(self, current_fronters: pk.Fronters, discord_user_id):
@@ -168,8 +185,65 @@ class AutoRoleChanger(commands.Cog):
     #     # await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
 
 
-    async def update_only_fronters(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
-                                   message: Optional[discord.Message] = None, force_update=False):
+    # async def update_only_fronters(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
+    #                                message: Optional[discord.Message] = None, force_update=False):
+    #     """ This method updates updates the DB with only the members of the system that are fronting.
+    #         It is designed to be called ONLY when we are reasonably sure that there has been a switch.
+    #
+    #         It checks the last DB update time for the system,
+    #             and only hits the members & fronters API endpoints IF the records are older than time_override.
+    #         This helps to ensure that the PK API is not abused.
+    #         It then checks the fronters reported by PK against the fronters in the Database.
+    #             If they are different, it calls the Discord APIs to change name and roles.
+    #
+    #         Min resource usage:
+    #             One DB Call.
+    #         Max resource usage:
+    #             4 DB Calls.
+    #             2 PK API Calls.
+    #     """
+    #     if ctx is not None:
+    #         discord_member: discord.Member = ctx.author
+    #         message: discord.Message = ctx.message
+    #
+    #     if message is not None:
+    #         discord_member: discord.Member = message.author
+    #
+    #     previous_fronters = await db.get_fronting_members_by_discord_account(self.db, discord_member.id)
+    #
+    #     if previous_fronters is not None:
+    #         system_id = previous_fronters[0].sid
+    #     else:  # No one was in front. Get system_id from discord id
+    #         sys_info = await db.get_system_id_by_discord_account(self.db, discord_member.id)
+    #         if sys_info is None:
+    #             return  # No registered account exists.
+    #         system_id = sys_info['pk_system_id']
+    #
+    #     # FIXME: This incorrectly will leave the previous fronters still marked as in front.
+    #     current_fronters = await self.get_fronters(system_id)
+    #     for member in current_fronters.members:
+    #         fronting = True
+    #         await db.update_member(self.db, system_id, member.hid, member.name, fronting=fronting)
+    #
+    #     if previous_fronters != current_fronters.members or force_update:
+    #         await self.info(f"Fronters changed!: Prev: {previous_fronters}, \nCur: {current_fronters}")
+    #
+    #         roles = []
+    #         for fronter in current_fronters.members:
+    #             new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now.# discord_member.guild.id)
+    #             if new_roles is not None:
+    #                 new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
+    #                 roles.extend(new_roles_ids)
+    #
+    #         new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
+    #         await self.autochange_discord_user(discord_member, roles, new_name)
+
+
+    async def update_system_members(self, force_member_update: bool = False, force_discord_update: bool = False, db_expiration_age:int = 86400,
+                                    discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
+                                    message: Optional[discord.Message] = None):
+
+        # Assign the proper variables from ctx/message.
         if ctx is not None:
             discord_member: discord.Member = ctx.author
             message: discord.Message = ctx.message
@@ -177,37 +251,64 @@ class AutoRoleChanger(commands.Cog):
         if message is not None:
             discord_member: discord.Member = message.author
 
-        previous_fronters = await db.get_fronting_members_by_discord_account(self.db, discord_member.id)
+        # We will try several methods to get the PK System ID. Set it to None for now, so we can know to stop trying...
+        system_id = None
+        if not force_member_update or not force_discord_update:
+            # Try to get any members that are past the expiration age.
+            # This is only to see if enough time has passed.
+            # If it has, we might as well get the PK System ID from the returned data.
+            # TODO: Find a better way of determining when to update?
+            stale_members = await db.get_members_by_discord_account_if_ood(self.db, discord_member.id, db_expiration_age)
+            if stale_members is None:
+                # It's not soon enough to try to do a full update. Bail for now.
+                return
+            system_id = stale_members[0]['pk_sid']
 
-        if previous_fronters is not None:
-            system_id = previous_fronters[0].sid
-        else:  # No one was in front. Get system_id from discord id
-            sys_info = await db.get_system_id_from_linked_account(self.db, discord_member.id)
+        # We need to get the stored fronters from the DB at this point.
+        # This is needed to determine if we need to call the Discord API later.
+        stale_fronters = await db.get_fronting_members_by_discord_account(self.db, discord_member.id)
+
+        # Try to get the system id from the fronters stored in the DB
+        # Stored fronters will be none if there is no one fronting or if the system does not exist in the DB.
+        if stale_fronters is not None and system_id is None:
+            system_id = stale_fronters[0].sid
+
+        # If we STILL don't have a system ID, pull it from the DB directly.
+        # (all the previous attempts DB calls still needed to happen, so by trying at each stage we can potentially save a DB call.)
+        if system_id is None:
+            sys_info = await db.get_system_id_by_discord_account(self.db, discord_member.id)
             if sys_info is None:
-                return  # No registered account exists.
+                return  # No registered account exists. Bail.
             system_id = sys_info['pk_system_id']
 
-        # FIXME: This incorrectly will leave the previous fronters still marked as in front.
-        current_fronters = await self.get_fronters(system_id)
-        for member in current_fronters.members:
-            fronting = True
-            await db.update_member(self.db, system_id, member.hid, member.name, fronting=fronting)
+        # We definitely have a system_id at this point, start calling the PK API.
+        # Get Fresh members and fronters
+        updated_members = await self.get_system_members(system_id)
+        updated_fronters = await self.get_fronters(system_id)  # TODO: Ask alyssa & astrid about using GET /s/<id>/switches[?before=] first.
 
-        if previous_fronters != current_fronters.members or force_update:
-            await self.info(f"Fronters changed!: Prev: {previous_fronters}, \nCur: {current_fronters}")
+        # Update the DB with the new information.
+        # TODO: Compare with the stale information and only update what has changed.
+        for update_member in updated_members:
+            fronting = True if update_member in updated_fronters.members else False
+            await db.update_member(self.db, system_id, update_member.hid, update_member.name, fronting=fronting)
+
+        #
+        if force_discord_update or stale_fronters is None or stale_fronters != updated_fronters.members:
+            await self.info(f"Fronters changed!: Prev: {stale_fronters}, \nCur: {updated_fronters}")
 
             roles = []
-            for fronter in current_fronters.members:
-                new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now.# discord_member.guild.id)
+            for fronter in updated_fronters.members:
+                new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[
+                    0])  # Force using only authorised guild for now.# discord_member.guild.id)
                 if new_roles is not None:
                     new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
                     roles.extend(new_roles_ids)
 
-            new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
+            new_name = updated_fronters.members[0].proxied_name if len(updated_fronters.members) > 0 else None
             await self.autochange_discord_user(discord_member, roles, new_name)
 
 
-    async def autochange_discord_user(self, discord_member: Union[discord.Member, discord.User], new_roles: List[Union[discord.Role, discord.Object]], new_name: Optional[str]):
+    async def autochange_discord_user(self,  discord_member: Union[discord.Member, discord.User], new_roles: List[Union[discord.Role, discord.Object]], new_name: Optional[str]):
         """Applies the new roles and name to the selected discord user"""
 
         # guild: discord.Guild = discord_member.guild
@@ -263,7 +364,8 @@ class AutoRoleChanger(commands.Cog):
             await self.info(f"{after.nick} changed their nickname from {before.nick}, attempting to call: update_only_fronters")
 
             # Update in nickname change if 5 minutes have passed since the last update.
-            await self.update_only_fronters(after)
+            # await self.update_only_fronters(after)
+            await self.update_system_members(force_member_update=True, discord_member=after)
 
 
     @commands.is_owner()
@@ -354,9 +456,9 @@ class AutoRoleChanger(commands.Cog):
                                   "If the fronter has changed, roles and nicknames will be updated accordingly.")
     async def update_command(self, ctx: commands.Context):
 
-        await self.update_system(ctx=ctx, time_override=1)
-        await self.update_only_fronters(ctx=ctx, force_update=True)  # TODO: Update update_system so both do not ahve to be called.
-
+        # await self.update_members(ctx=ctx, time_override=1)
+        # await self.update_only_fronters(ctx=ctx, force_update=True)  # TODO: Update update_system so both do not ahve to be called.
+        await self.update_system_members(force_discord_update=True, ctx=ctx)
         if ctx.guild.id in authorized_guilds:
             user_settings = await db.get_user_settings_from_discord_id(self.db, ctx.author.id, ctx.guild.id)
             if not user_settings.role_change and not user_settings.name_change:
@@ -399,7 +501,7 @@ class AutoRoleChanger(commands.Cog):
 
         members = await db.get_members_by_discord_account(self.db, ctx.author.id)
 
-        if len(members) == 0:
+        if members is None or len(members) == 0:
             await ctx.send(
                 f"You do not have a Plural Kit account registered. Use `{self.bot.command_prefix}register` to register your system.")
             return
@@ -512,7 +614,7 @@ class AutoRoleChanger(commands.Cog):
                     bad_roles.append(raw_role)
 
             members = await db.get_members_by_discord_account(self.db, ctx.author.id)  # ctx.author.id)
-            if len(members) == 0:  # FIXME: This will change to None at some point
+            if members is None or len(members) == 0:
 
                 await ctx.send(
                     f"You do not have a Plural Kit account registered. Use `{self.bot.command_prefix}register` to register your system.")
@@ -774,7 +876,7 @@ class AutoRoleChanger(commands.Cog):
                     bad_roles.append(raw_role)
 
             members = await db.get_members_by_discord_account(self.db, ctx.author.id)  # ctx.author.id)
-            if len(members) == 0:  # FIXME: This will change to None at some point
+            if members is None or len(members) == 0:
                 await ctx.send(
                     f"You do not have a Plural Kit account registered. Use `{self.bot.command_prefix}register` to register your system.")
                 return
@@ -1223,7 +1325,7 @@ class AutoRoleChanger(commands.Cog):
         current_fronters = await self.get_fronters(system_id)
         await self.info(f"{current_fronters}")
         await self.info(f"adding new system to DB: {system.name} ({system.hid})")
-        await db.add_new_system(self.db, system_id, system.name, None, None)
+        await db.add_new_system(self.db, system_id, system.name, None, system.tag, None)
 
         # Add default user settings
         await db.update_user_setting(self.db, system_id, ctx.guild.id, name_change=False, role_change=False)
@@ -1244,7 +1346,6 @@ class AutoRoleChanger(commands.Cog):
 
 
         # await self.getting_started(ctx)
-
 
 
     async def prompt_for_pk_token(self, ctx: commands.Context):

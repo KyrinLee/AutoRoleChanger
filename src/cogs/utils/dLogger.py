@@ -129,7 +129,10 @@ class dLogger:
             message_chunks = [code_block_start + chunk + code_block_end for chunk in chunks]
 
         else:
-            message_chunks = textwrap.wrap(message, width=2000)
+            if len(message) > 1950:
+                message_chunks = textwrap.wrap(message, width=2000)
+            else:
+                message_chunks = [message]
 
         for chunk in message_chunks:
             message = await channel.send(chunk)

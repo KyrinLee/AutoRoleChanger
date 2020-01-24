@@ -12,6 +12,7 @@ import cogs.utils.pluralKit as pk
 
 log = logging.getLogger("RoleChanger.db")
 
+db_version = 1
 
 def db_deco(func):
     @functools.wraps(func)
@@ -44,13 +45,13 @@ def db_deco(func):
 #
 
 @db_deco
-async def add_new_system(db: str, pk_sid: str, system_name: str, current_fronter: str, pk_token: Optional[str] = None):
+async def add_new_system(db: str, pk_sid: str, system_name: str, current_fronter: str, pk_system_tag: Optional[str], pk_token: Optional[str] = None):
     async with aiosqlite.connect(db) as conn:
         # Convert ts to int
         update_ts: datetime = datetime.utcnow().timestamp()
         await conn.execute(
-            "INSERT INTO systems(pk_sid, system_name, last_update) VALUES(?, ?, ?)",
-            (pk_sid, system_name, update_ts))
+            "INSERT INTO systems(pk_sid, system_name, last_update, pk_system_tag) VALUES(?, ?, ?, ?)",
+            (pk_sid, system_name, update_ts, pk_system_tag))
         await conn.commit()
 
 
@@ -64,13 +65,13 @@ async def add_linked_discord_account(db: str, pk_sid: str, dis_uid: int):
 
 
 @db_deco
-async def get_system_id_from_linked_account(db: str, dis_uid: int) -> Optional:
+async def get_system_id_by_discord_account(db: str, dis_uid: int) -> Optional:
     async with aiosqlite.connect(db) as conn:
         cursor = await conn.execute(" SELECT * from accounts WHERE dis_uid = ?", (dis_uid,))
         row = await cursor.fetchone()
         # interview_dict = dict(zip(interview_row_map, row))
         # return row_to_interview_dict(row)
-        if row is not None and len(row) > 0:
+        if row is not None and len(row) > 0:  # TODO: Only return the pk_system_id or None.
             row = {
                 'discord_account': row[0],
                 'pk_system_id': row[1]
@@ -78,23 +79,22 @@ async def get_system_id_from_linked_account(db: str, dis_uid: int) -> Optional:
             return row
         else:
             return None
-#
-# @db_deco
-# async def get_system_tag_from_linked_account(db: str, dis_uid: int) -> Optional:
-#     async with aiosqlite.connect(db) as conn:
-#         cursor = await conn.execute(" SELECT * from accounts WHERE dis_uid = ?", (dis_uid,))
-#         row = await cursor.fetchone()
-#         # interview_dict = dict(zip(interview_row_map, row))
-#         # return row_to_interview_dict(row)
-#         if row is not None and len(row) > 0:
-#             row = {
-#                 'discord_account': row[0],
-#                 'pk_system_id': row[1]
-#             }
-#             return row
-#         else:
-#             return None
-#         # system_tag
+
+
+
+@db_deco
+async def get_system_tag_by_pk_sid(db: str, pk_sid: str) -> Optional:
+    async with aiosqlite.connect(db) as conn:
+        system_tag_map = ['pk_system_tag', 'system_tag_override', 'system_name']
+        cursor = await conn.execute(" SELECT pk_system_tag, system_tag_override from systems WHERE pk_sid = ?", (pk_sid,))
+        row = await cursor.fetchone()
+
+        if row is not None and len(row) > 0:
+            tag = dict(zip(system_tag_map, row))
+            return tag
+        else:
+            return None
+        # system_tag
 
 
 async def get_all_linked_accounts(db: str, pk_sid: str) -> Optional[List[int]]:
@@ -110,9 +110,11 @@ async def get_all_linked_accounts(db: str, pk_sid: str) -> Optional[List[int]]:
         return None
 
 
-ood_sys_map = ['pk_sid', 'pk_token']
+
+# Currently Unused...
 @db_deco
 async def get_all_outofdate_systems(db: str, older_than: int = 86400)-> Optional[List[Dict]]:
+    ood_sys_map = ['pk_sid', 'pk_token']
     async with aiosqlite.connect(db) as conn:
         time = datetime.utcnow().timestamp() - older_than
         log.info(f"time: {time}")
@@ -194,7 +196,7 @@ async def get_members_by_pk_sid(db: str, pk_sid: str) -> List[Dict]:
 
 
 @db_deco
-async def get_members_by_discord_account(db: str, discord_user_id: int) -> List[Dict]:
+async def get_members_by_discord_account(db: str, discord_user_id: int) -> Optional[List[Dict]]:
     async with aiosqlite.connect(db) as conn:
         cursor = await conn.execute("""
                                     SELECT members.pk_sid, members.pk_mid, members.member_name, members.fronting, members.last_update
@@ -206,11 +208,15 @@ async def get_members_by_discord_account(db: str, discord_user_id: int) -> List[
         # rows = []
         # for row in raw_rows:
         #     rows.append(row_to_interview_dict(row))
-        return rows
+        if len(rows) == 0:
+            return None
+        else:
+            return rows
 
 
 @db_deco
 async def get_members_by_discord_account_if_ood(db: str, discord_user_id: int, older_than: int = 86400)-> Optional[List[Dict]]:
+    ood_members_map = ['pk_sid', 'pk_mid', 'member_name', 'fronting', 'last_update']
     async with aiosqlite.connect(db) as conn:
         # dict_map = []
         time = datetime.utcnow().timestamp() - older_than
@@ -221,7 +227,7 @@ async def get_members_by_discord_account_if_ood(db: str, discord_user_id: int, o
                                         INNER JOIN accounts on accounts.pk_sid = members.pk_sid
                                         WHERE accounts.dis_uid = ? and members.last_update < ?""", (discord_user_id, time))
         raw_rows = await cursor.fetchall()
-        rows = [dict(zip(ood_sys_map, row)) for row in raw_rows]  # FIXME: The map is wrong.
+        rows = [dict(zip(ood_members_map, row)) for row in raw_rows]  # FIXME: The map is wrong.
         if len(rows) == 0:
             return None
         else:
@@ -573,6 +579,54 @@ async def remove_user_settings(db: str, pk_sid: str, guild_id: int):
 
 
 # ---------- Table Creation ---------- #
+
+# alter table systems
+# 	add pk_system_tag text default NULL;
+#
+# alter table systems
+# 	add system_tag_override text default NULL;
+# https://stackoverflow.com/questions/989558/best-practices-for-in-app-database-migration-for-sqlite
+
+@db_deco
+async def migrate_to_latest(db: str):
+    async with aiosqlite.connect(db) as conn:
+
+        # Get the DB Version
+        cursor = await conn.execute("PRAGMA user_version")
+        user_version = await cursor.fetchone()
+
+        if user_version[0] != db_version:
+            log.warning(f"DB Version is behind. Current: {user_version[0]}, Latest: {db_version}!\n Migrating Tables Forward!!!")
+            # The DB is behind. Migrate it to current step by step.
+            if user_version[0] == 0:
+                log.warning(f"Migrating Tables to version 1")
+                await conn.execute('''
+                                      alter table systems
+                                      add pk_system_tag text default NULL;
+                                    ''')
+                await conn.execute('''
+                                      alter table systems
+                                      add system_tag_override text default NULL;
+                                    ''')
+                # Set DB to next version
+                await conn.execute(f"PRAGMA user_version = 1")
+                log.warning(f"Tables have been migrated to version 1")
+
+            if user_version[0] == 1:
+                log.warning(f"Migrating Tables to version 2")
+                await conn.execute('''
+                                      alter table systems
+                                      add pk_system_tag text default NULL;
+                                    ''')
+                await conn.execute('''
+                                      alter table systems
+                                      add system_tag_override text default NULL;
+                                    ''')
+                # Set DB to next version
+                await conn.execute(f"PRAGMA user_version = 2")
+                log.warning(f"Tables have been migrated to version 2")
+
+
 @db_deco
 async def create_tables(db: str):
     async with aiosqlite.connect(db) as conn:
@@ -583,10 +637,11 @@ async def create_tables(db: str):
                                system_name          TEXT default 'unknown',
                                pk_token             TEXT DEFAULT NULL,
                                current_fronter      TEXT DEFAULT NULL,
-                               last_update          BIGINT,
-                               system_tag           TEXT DEFAULT NULL
+                               last_update          BIGINT
                               );
                         ''')
+                              #pk_system_tag        TEXT DEFAULT NULL,
+                              #system_tag_override  TEXT DEFAULT NULL
 
         await conn.execute('''
                                CREATE TABLE if not exists members  (
