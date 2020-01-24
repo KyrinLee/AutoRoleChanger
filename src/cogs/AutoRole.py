@@ -130,8 +130,9 @@ class AutoRoleChanger(commands.Cog):
                 roles = []
                 for fronter in current_fronters.members:
                     new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now. #discord_member.guild.id)
-                    new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
-                    roles.extend(new_roles_ids)
+                    if new_roles is not None:
+                        new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
+                        roles.extend(new_roles_ids)
 
                 # await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
                 new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
@@ -189,9 +190,9 @@ class AutoRoleChanger(commands.Cog):
             await db.update_member(self.db, system_id, member.hid, member.name, fronting=fronting)
 
         if previous_fronters != current_fronters.members or force_update:
-            roles = []
             await self.info(f"Fronters changed!: Prev: {previous_fronters}, \nCur: {current_fronters}")
-
+            
+            roles = []
             for fronter in current_fronters.members:
                 new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now.# discord_member.guild.id)
                 if new_roles is not None:
