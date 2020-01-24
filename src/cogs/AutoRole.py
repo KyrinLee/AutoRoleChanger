@@ -253,7 +253,7 @@ class AutoRoleChanger(commands.Cog):
 
         # We will try several methods to get the PK System ID. Set it to None for now, so we can know to stop trying...
         system_id = None
-        if not force_member_update or not force_discord_update:
+        if not force_member_update and not force_discord_update:
             # Try to get any members that are past the expiration age.
             # This is only to see if enough time has passed.
             # If it has, we might as well get the PK System ID from the returned data.
@@ -291,6 +291,7 @@ class AutoRoleChanger(commands.Cog):
         for update_member in updated_members:
             fronting = True if update_member in updated_fronters.members else False
             await db.update_member(self.db, system_id, update_member.hid, update_member.name, fronting=fronting)
+        await self.info(f"Updated members for {discord_member.name}")
 
         #
         if force_discord_update or stale_fronters is None or stale_fronters != updated_fronters.members:
@@ -306,6 +307,11 @@ class AutoRoleChanger(commands.Cog):
 
             new_name = updated_fronters.members[0].proxied_name if len(updated_fronters.members) > 0 else None
             await self.autochange_discord_user(discord_member, roles, new_name)
+        else:
+            await self.info(f"Not updating roles: force_discord_update:{force_discord_update}, "
+                            f"\n stale_fronters: {stale_fronters} "
+                            f"\nupdated_fronters.members: {updated_fronters.members}"
+                            f"\nComparison: {stale_fronters != updated_fronters.members}")
 
 
     async def autochange_discord_user(self,  discord_member: Union[discord.Member, discord.User], new_roles: List[Union[discord.Role, discord.Object]], new_name: Optional[str]):
