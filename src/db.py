@@ -78,6 +78,23 @@ async def get_system_id_from_linked_account(db: str, dis_uid: int) -> Optional:
             return row
         else:
             return None
+#
+# @db_deco
+# async def get_system_tag_from_linked_account(db: str, dis_uid: int) -> Optional:
+#     async with aiosqlite.connect(db) as conn:
+#         cursor = await conn.execute(" SELECT * from accounts WHERE dis_uid = ?", (dis_uid,))
+#         row = await cursor.fetchone()
+#         # interview_dict = dict(zip(interview_row_map, row))
+#         # return row_to_interview_dict(row)
+#         if row is not None and len(row) > 0:
+#             row = {
+#                 'discord_account': row[0],
+#                 'pk_system_id': row[1]
+#             }
+#             return row
+#         else:
+#             return None
+#         # system_tag
 
 
 async def get_all_linked_accounts(db: str, pk_sid: str) -> Optional[List[int]]:
@@ -566,7 +583,8 @@ async def create_tables(db: str):
                                system_name          TEXT default 'unknown',
                                pk_token             TEXT DEFAULT NULL,
                                current_fronter      TEXT DEFAULT NULL,
-                               last_update          BIGINT
+                               last_update          BIGINT,
+                               system_tag           TEXT DEFAULT NULL
                               );
                         ''')
 

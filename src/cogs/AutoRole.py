@@ -43,7 +43,6 @@ def is_authorized_guild():
 
         return True
 
-
     return commands.check(predicate)
 
 
@@ -273,9 +272,20 @@ class AutoRoleChanger(commands.Cog):
                       description="Cause the bot to check with PK to see who is fronting.\n"
                                   "If the fronter has changed, roles and nicknames will be updated accordingly.")
     async def update_command(self, ctx: commands.Context):
+
         await self.update_system(ctx=ctx, time_override=1)
         await self.update_only_fronters(ctx=ctx, force_update=True)  # TODO: Update update_system so both do not ahve to be called.
-        await ctx.send("System updated! If your roles and name did not update, please try again in a minute.")
+
+        if ctx.guild.id in authorized_guilds:
+            user_settings = await db.get_user_settings_from_discord_id(self.db, ctx.author.id, ctx.guild.id)
+            if not user_settings.role_change and not user_settings.name_change:
+                await ctx.send("You do not have roles or name changes enabled!")
+            elif user_settings.role_change and user_settings.name_change:
+                await ctx.send("System updated! If your roles and name did not update, please try again in a minute.")
+            elif user_settings.role_change:
+                await ctx.send("System updated! If your roles did not update, please try again in a minute.")
+            elif user_settings.name_change:
+                await ctx.send("System updated! If your name did not update, please try again in a minute.")
 
 
     # @is_authorized_guild()
@@ -298,7 +308,7 @@ class AutoRoleChanger(commands.Cog):
                 else:
                     await ctx.send(f"{member['member_name']} has no roles!")
             else:
-                await ctx.send(f"Could not find {member_input.response.content} in your system.")
+                await ctx.send(f"Could not find {member_input.response.content} in your system. Try using the 5 character Plural Kit ID.")
 
 
     # @is_authorized_guild()
@@ -471,7 +481,7 @@ class AutoRoleChanger(commands.Cog):
 
             member = await db.get_member_fuzzy(self.db, ctx.author.id, response.content)
             if member is None:
-                await ctx.send(f"Could not find {response.content} in your system.")
+                await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID.")
             else:
                 self.member = member
                 remove_roles = reactMenu.Page(reactMenu.ResponseType(1),
@@ -532,7 +542,7 @@ class AutoRoleChanger(commands.Cog):
 
             # Construct embed to tell the user of the successes and failures.
             embed = discord.Embed()
-            embed.set_author(name=f"Roles removed from all members:")
+            embed.set_author(name=f"Roles removed from {self.member['member_name']}:")
 
             if len(good_roles) > 0:
                 good_roles_msg = ", ".join([f"<@&{role.id}>" for role in good_roles])
@@ -728,7 +738,7 @@ class AutoRoleChanger(commands.Cog):
 
             member = await db.get_member_fuzzy(self.db, ctx.author.id, response.content)
             if member is None:
-                await ctx.send(f"Could not find {response.content} in your system.")
+                await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID.")
             else:
                 self.member = member
 
@@ -752,7 +762,7 @@ class AutoRoleChanger(commands.Cog):
 
             member = await db.get_member_fuzzy(self.db, ctx.author.id, response.content)
             if member is None:
-                await ctx.send(f"Could not find {response.content} in your system.")
+                await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID")
             else:
                 self.member = member
                 add_roles = reactMenu.Page(reactMenu.ResponseType(1),
@@ -818,7 +828,7 @@ class AutoRoleChanger(commands.Cog):
 
             # Construct embed to tell the user of the successes and failures.
             embed = discord.Embed()
-            embed.set_author(name=f"Roles added to all members:")
+            embed.set_author(name=f"Roles added to {self.member['member_name']}")
 
             if len(good_roles) > 0:
                 good_roles_msg = ", ".join([f"<@&{role.id}>" for role in good_roles])
@@ -1148,19 +1158,42 @@ class AutoRoleChanger(commands.Cog):
         # await self.info(f"adding the following members to the db: {members}")
         await ctx.send(f"Your system and {len(members)} members of your system have been registered successfully!\n"
                        f"Hidden members are not yet supported.\n\n"
-                       f"Auto name and role changing is currently **Off**. You may change these settings by using the **{self.bot.command_prefix}settings** command\n"
-                       f"You may set up your system members roles by using the **{self.bot.command_prefix}add_role** command\n"
-                       f"You can see the list of roles by a system member has using the **{self.bot.command_prefix}list_roles** command\n\n"
-                       f"After everything has been set up, Auto Role Changer SHOULD change your roles and/or account name as configured when it detects a switch.\n")
+                       f"Auto name and role changing is currently **Off**. You may change these settings by using the **{self.bot.command_prefix}settings** command\n")
+        await self.help_screen(ctx)
+                       # f"You may set up your system members roles by using the **{self.bot.command_prefix}add_role** command\n"
+                       # f"You can see the list of roles by a system member has using the **{self.bot.command_prefix}list_roles** command\n\n"
+                       # f"After everything has been set up, Auto Role Changer SHOULD change your roles and/or account name as configured when it detects a switch.\n")
 
-        await ctx.send(f"Currently Auto ROle Changer check to see if you have switched for the following reasons:\n"
+        # await ctx.send(f"Currently Auto ROle Changer check to see if you have switched for the following reasons:\n"
+        #                f"30 seconds after using a Plural Kit switch command in a server with Auto Role Changer. (The 30 second delay is to allow account for lag in the Plural Kit API)\n"
+        #                f"After a nickname change in a server with Auto Role Changer.\n"
+        #                f"Once an hour, but only if you have been talking in the server.\n"
+        #                f"When the **{self.bot.command_prefix}update** command has been used.\n"
+        #                f"Currently, Roles and Nicknames are only changed on Plural Nest, "
+        #                f"however feel free to invite Auto Role Changer to your personal/public server. "
+        #                f"This will give you the immediate benefit of those actions described above working for you in other servers.")
+
+
+    async def help_screen(self, ctx):
+        role_and_name_settings = "Off"
+        embed = discord.Embed(author="Auto Role Changer Help")
+        # embed.add_field(name="Current Settings:", value=f"Auto name and role changing is currently **{role_and_name_settings}**. No roles are set")
+
+        embed.add_field(name="How to get started:",
+                        value=f"You should change your auto name and role changing settings by using the **{self.bot.command_prefix}settings** command\n"
+                              f"You may set up your system members roles by using the **{self.bot.command_prefix}add_role** command\n"
+                              f"You can see the list of roles by a system member has using the **{self.bot.command_prefix}list_roles** command\n\n")
+        embed.add_field(name="When does the Auto Role Changer change your roles and/or name?",
+                        value=f"Currently Auto ROle Changer check to see if you have switched for the following reasons:\n"
                        f"30 seconds after using a Plural Kit switch command in a server with Auto Role Changer. (The 30 second delay is to allow account for lag in the Plural Kit API)\n"
                        f"After a nickname change in a server with Auto Role Changer.\n"
                        f"Once an hour, but only if you have been talking in the server.\n"
-                       f"When the **{self.bot.command_prefix}update** command has been used.\n"
+                       f"When the **{self.bot.command_prefix}update** command has been used.\n "
                        f"Currently, Roles and Nicknames are only changed on Plural Nest, "
                        f"however feel free to invite Auto Role Changer to your personal/public server. "
                        f"This will give you the immediate benefit of those actions described above working for you in other servers.")
+
+        await ctx.send(embed=embed)
 
     async def prompt_for_pk_token(self, ctx: commands.Context):
         author: discord.Member = ctx.author
