@@ -17,7 +17,8 @@ log = logging.getLogger("PNBot")
 
 extensions = (
     'cogs.AutoRole',
-    # 'cogs.Dev',`
+    # 'cogs.AutoRoleHelp',
+    # 'cogs.Dev',
 )
 
 
@@ -31,6 +32,7 @@ class PNBot(commands.Bot):
         self.info_log_channel_id: Optional[int] = None
 
         self.dLog = dLogger(self)
+        self.remove_command("help")  # Remove the built in help command so we can make the about section look nicer.
 
 
     def load_cogs(self):

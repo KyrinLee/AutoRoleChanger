@@ -31,6 +31,10 @@ TODO:
     Add proper alt account support. 
 """
 
+# Unicode Characters:
+"\N{ZERO WIDTH NON-JOINER}"  # \u200c
+"\N{ZERO WIDTH SPACE}"  # \u200b Mentioned on d.py discord
+
 
 def is_authorized_guild():
     async def predicate(ctx):
@@ -191,7 +195,7 @@ class AutoRoleChanger(commands.Cog):
 
         if previous_fronters != current_fronters.members or force_update:
             await self.info(f"Fronters changed!: Prev: {previous_fronters}, \nCur: {current_fronters}")
-            
+
             roles = []
             for fronter in current_fronters.members:
                 new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now.# discord_member.guild.id)
@@ -266,6 +270,82 @@ class AutoRoleChanger(commands.Cog):
     @commands.command(name="crash")
     async def crash(self, ctx):
         assert 1 == 0
+
+
+    # ----- Help & About Commands ----- #
+
+    @commands.command(name="help", hidden=False, usage="['command' | more]")
+    async def _help(self, ctx, *args):
+
+        if args:
+            await ctx.send_help(*args)
+        else:
+            # await ctx.send(embed=embeds.about_message())
+            # await self.help_screen(ctx)
+            get_started = [
+                f"To get started using Auto Role Changer first take a look at the get started page by using **{self.bot.command_prefix}get_started**",
+                f"Then register your system using **{self.bot.command_prefix}register**",
+            ]
+
+            important_notes = [
+                f"Please note that Role and Name changing is _off_ by default and must be turned on after you have registered for them to work."
+            ]
+
+            tips = [
+                f"Most commands have shorter aliases. You can find them by using **{self.bot.command_prefix}help <command name>**"
+            ]
+
+            embed = discord.Embed(title="Auto Role Changer Help")
+            # embed.description = "\n".join(get_started)
+            embed.add_field(name="Getting Started", value="\n".join(get_started), inline=False)
+            embed.add_field(name="Important Notes", value="\n".join(important_notes), inline=False)
+            embed.add_field(name="Tips", value="\n".join(tips), inline=False)
+            await ctx.send(embed=embed)
+            await ctx.send_help()
+
+
+    @commands.command(name="get_started")
+    async def getting_started(self, ctx):
+        role_and_name_settings = "Off"
+        embed = discord.Embed(title="Auto Role Changer Getting Started")
+        # embed.add_field(name="Current Settings:", value=f"Auto name and role changing is currently **{role_and_name_settings}**. No roles are set")
+        zws = "\N{ZERO WIDTH SPACE}"
+        dot = "\N{Middle Dot}"
+        started = [
+            f"First you must register your system by using the **{self.bot.command_prefix}register** command.\n",
+            f"You should then change your auto name and role changing settings by using the **{self.bot.command_prefix}settings** command.\n",
+            f"You may set up your system members roles by using the **{self.bot.command_prefix}add_role** command.\n",
+            f"You can see the list of roles a system member has using the **{self.bot.command_prefix}list_roles** command.\n",
+            f"If you need to remove any roles, use the **{self.bot.command_prefix}remove_role** command.\n",
+            f"Take a look at the rest of the commands with the **{self.bot.command_prefix}help** command.\n{zws}"
+        ]
+
+        when_does_it_work = [
+            f"Currently Auto Role Changer check to see if you have switched for the following reasons:\n",
+            f"\N{bullet} 30 seconds after using a Plural Kit switch command in a server with Auto Role Changer. (The 30 second delay is to allow account for lag in the Plural Kit API)",
+            f"\N{bullet} After a nickname change in a server with Auto Role Changer.",
+            f"\N{bullet} Once an hour, but only if you have been talking in the server.",
+            f"\N{bullet} When the **{self.bot.command_prefix}update** command has been used.\n{zws}"
+        ]
+
+        where_does_it_work = [
+            f"Currently, Roles and Nicknames are only changed on Plural Nest, however feel free to invite Auto Role Changer to your personal/public server.",
+            # f"This will give you the immediate benefit of those actions described above working for you in other servers.",
+            f"This will give you the benefit of letting Auto Role Changer be able to detect your switches when the appropriate actions are done in other servers.",
+            f"In the future, Auto Role Changer will be able to change your roles and Nickname in other servers as well!\n",
+        ]
+
+        embed.add_field(name="How to get started:",
+                        value=f"\n{zws}".join(started),
+                        inline=False)
+        embed.add_field(name="When does the Auto Role Changer change your roles and/or name?",
+                        value=f"\n{zws}".join(when_does_it_work),
+                        inline=False)
+        embed.add_field(name="Where does Auto Role Changer change your roles and/or name?",
+                        value=f"\n{zws}".join(where_does_it_work),
+                        inline=False)
+
+        await ctx.send(embed=embed)
 
 
     @commands.guild_only()
@@ -1106,7 +1186,7 @@ class AutoRoleChanger(commands.Cog):
         """Allows you to link your PK account to this bot."""
         # TODO: Add ability to update current registration (Mainly discord accounts)
 
-        await ctx.send(f"To register your Plural Kit account, please use the command `pk;s` to have Plural Kit send you system card")
+        await ctx.send(f"To register your Plural Kit account, please use the command `pk;s` to have Plural Kit send your system card")
 
         def check_for_pk_response(m: discord.Message):
             # log.info(f"Got Message: {m}, Embeds: {len(m.embeds)}")
@@ -1157,44 +1237,15 @@ class AutoRoleChanger(commands.Cog):
             fronting = True if member in current_fronters.members else False
             await db.add_new_member(self.db, system_id, member.hid, member.name, fronting=fronting)
         # await self.info(f"adding the following members to the db: {members}")
+        await ctx.invoke(self.getting_started)
         await ctx.send(f"Your system and {len(members)} members of your system have been registered successfully!\n"
                        f"Hidden members are not yet supported.\n\n"
                        f"Auto name and role changing is currently **Off**. You may change these settings by using the **{self.bot.command_prefix}settings** command\n")
-        await self.help_screen(ctx)
-                       # f"You may set up your system members roles by using the **{self.bot.command_prefix}add_role** command\n"
-                       # f"You can see the list of roles by a system member has using the **{self.bot.command_prefix}list_roles** command\n\n"
-                       # f"After everything has been set up, Auto Role Changer SHOULD change your roles and/or account name as configured when it detects a switch.\n")
-
-        # await ctx.send(f"Currently Auto ROle Changer check to see if you have switched for the following reasons:\n"
-        #                f"30 seconds after using a Plural Kit switch command in a server with Auto Role Changer. (The 30 second delay is to allow account for lag in the Plural Kit API)\n"
-        #                f"After a nickname change in a server with Auto Role Changer.\n"
-        #                f"Once an hour, but only if you have been talking in the server.\n"
-        #                f"When the **{self.bot.command_prefix}update** command has been used.\n"
-        #                f"Currently, Roles and Nicknames are only changed on Plural Nest, "
-        #                f"however feel free to invite Auto Role Changer to your personal/public server. "
-        #                f"This will give you the immediate benefit of those actions described above working for you in other servers.")
 
 
-    async def help_screen(self, ctx):
-        role_and_name_settings = "Off"
-        embed = discord.Embed(author="Auto Role Changer Help")
-        # embed.add_field(name="Current Settings:", value=f"Auto name and role changing is currently **{role_and_name_settings}**. No roles are set")
+        # await self.getting_started(ctx)
 
-        embed.add_field(name="How to get started:",
-                        value=f"You should change your auto name and role changing settings by using the **{self.bot.command_prefix}settings** command\n"
-                              f"You may set up your system members roles by using the **{self.bot.command_prefix}add_role** command\n"
-                              f"You can see the list of roles by a system member has using the **{self.bot.command_prefix}list_roles** command\n\n")
-        embed.add_field(name="When does the Auto Role Changer change your roles and/or name?",
-                        value=f"Currently Auto ROle Changer check to see if you have switched for the following reasons:\n"
-                       f"30 seconds after using a Plural Kit switch command in a server with Auto Role Changer. (The 30 second delay is to allow account for lag in the Plural Kit API)\n"
-                       f"After a nickname change in a server with Auto Role Changer.\n"
-                       f"Once an hour, but only if you have been talking in the server.\n"
-                       f"When the **{self.bot.command_prefix}update** command has been used.\n "
-                       f"Currently, Roles and Nicknames are only changed on Plural Nest, "
-                       f"however feel free to invite Auto Role Changer to your personal/public server. "
-                       f"This will give you the immediate benefit of those actions described above working for you in other servers.")
 
-        await ctx.send(embed=embed)
 
     async def prompt_for_pk_token(self, ctx: commands.Context):
         author: discord.Member = ctx.author
