@@ -45,7 +45,6 @@ class Page:
         self.callback = callback
         self.response = None
 
-
     async def run(self, client: commands.Bot, ctx: commands.Context):
 
         if self.response_type == ResponseType.boolean:
@@ -58,7 +57,6 @@ class Page:
             await self.run_custom_response(client, ctx)
 
         self.LOG.info("Ran {}".format(self.name))
-
 
     async def run_boolean(self, client: commands.Bot, ctx: commands.Context):
         """
@@ -101,7 +99,6 @@ class Page:
         except asyncio.TimeoutError:
             await page_message.remove_reaction("❌", client.user)
             await page_message.remove_reaction("✅", client.user)
-
 
     async def run_string(self, client: commands.Bot, ctx: commands.Context):
         """

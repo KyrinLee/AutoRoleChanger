@@ -12,7 +12,8 @@ import cogs.utils.pluralKit as pk
 
 log = logging.getLogger("RoleChanger.db")
 
-db_version = 1
+db_version = 3
+
 
 def db_deco(func):
     @functools.wraps(func)
@@ -81,12 +82,11 @@ async def get_system_id_by_discord_account(db: str, dis_uid: int) -> Optional:
             return None
 
 
-
 @db_deco
 async def get_system_tag_by_pk_sid(db: str, pk_sid: str) -> Optional:
     async with aiosqlite.connect(db) as conn:
         system_tag_map = ['pk_system_tag', 'system_tag_override', 'system_name']
-        cursor = await conn.execute(" SELECT pk_system_tag, system_tag_override from systems WHERE pk_sid = ?", (pk_sid,))
+        cursor = await conn.execute(" SELECT pk_system_tag from systems WHERE pk_sid = ?", (pk_sid,))
         row = await cursor.fetchone()
 
         if row is not None and len(row) > 0:
@@ -94,9 +94,20 @@ async def get_system_tag_by_pk_sid(db: str, pk_sid: str) -> Optional:
             return tag
         else:
             return None
-        # system_tag
 
 
+@db_deco
+async def update_system_by_pk_sid(db: str, pk_sid: str, system_name: str, system_tag: str):
+    async with aiosqlite.connect(db) as conn:
+        system_tag_map = ['pk_system_tag', 'system_tag_override', 'system_name']
+
+        await conn.execute("""UPDATE systems
+                              SET pk_system_tag = ?, system_name = ?
+                              WHERE pk_sid = ?""", (system_tag, system_name, pk_sid))
+        await conn.commit()
+
+
+@db_deco
 async def get_all_linked_accounts(db: str, pk_sid: str) -> Optional[List[int]]:
     async with aiosqlite.connect(db) as conn:
         cursor = await conn.execute("""SELECT dis_uid
@@ -108,7 +119,6 @@ async def get_all_linked_accounts(db: str, pk_sid: str) -> Optional[List[int]]:
             return accounts
 
         return None
-
 
 
 # Currently Unused...
@@ -153,6 +163,15 @@ async def add_new_member(db: str, pk_sid: str, pk_mid: str, member_name: str, fr
         await conn.execute(
             "INSERT INTO members(pk_sid, pk_mid, member_name, fronting, last_update) VALUES(?, ?, ?, ?, ?)",
             (pk_sid, pk_mid, member_name, fronting, update_ts))
+        await conn.commit()
+
+
+@db_deco
+async def delete_member(db: str, pk_sid: str, pk_mid: str):
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute(
+            "DELETE FROM members WHERE pk_sid = ? AND pk_mid = ?",
+            (pk_sid, pk_mid))
         await conn.commit()
 
 
@@ -354,7 +373,7 @@ async def add_role_to_member(db: str, guild_id: int, pk_mid: str, pk_sid: str, r
     async with aiosqlite.connect(db) as conn:
         try:
             await conn.execute(
-                "INSERT INTO roles(pk_mid, pk_sid, role_id, guild_id) VALUES(?, ?, ?, ?)",
+                "INSERT or ignore INTO roles(pk_mid, pk_sid, role_id, guild_id) VALUES(?, ?, ?, ?)",
                 (pk_mid, pk_sid, role_id, guild_id))
             await conn.commit()
         except sqlite3.InterfaceError as e:
@@ -416,6 +435,13 @@ class AllowableRoles:
         self.guild_id: int = rows[0][1]  # Guild ID will be the same for every role, so just set it from the first
         self.role_ids = [row[0] for row in rows]
 
+    def is_allowed(self, other_role: discord.Role):
+        for allowed_role_id in self.role_ids:
+            if allowed_role_id == other_role.id:
+                return True
+
+        return False
+
     def allowed_intersection(self, other_roles: List[discord.Role]):
         """ returns list of allowed discord role objects """
         good_roles = []
@@ -443,18 +469,6 @@ class AllowableRoles:
         return bad_roles
 
 
-class UserSettings:
-    pk_sid: str
-    guild_id: int
-    name_change: bool
-    role_change: bool
-    row_map = ['pk_sid', 'guild_id', 'name_change', 'role_change']
-
-    def __init__(self, row: aiosqlite.Row):
-        self.pk_sid: str = row[0]
-        self.guild_id: int = row[1]
-        self.name_change: bool = bool(row[2])
-        self.role_change: bool = bool(row[3])
 
 
 @db_deco
@@ -464,6 +478,35 @@ async def add_allowable_role(db: str, guild_id: int, role_id: int):
             "INSERT or ignore INTO allowable_roles(role_id, guild_id) VALUES(?, ?)",
             (role_id, guild_id))
         await conn.commit()
+
+
+@db_deco
+async def get_allowable_roles(db: str, guild_id: int) -> Optional[AllowableRoles]:
+    async with aiosqlite.connect(db) as conn:
+        cursor = await conn.execute(" SELECT * from allowable_roles where guild_id = ?", (guild_id,))
+        raw_rows = await cursor.fetchall()
+
+        if len(raw_rows) == 0:
+            return None
+        allowable_roles = AllowableRoles(raw_rows)
+        return allowable_roles
+
+
+class UserSettings:
+    pk_sid: str
+    guild_id: int
+    name_change: bool
+    role_change: bool
+    system_tag_override: Optional[set]
+    row_map = ['pk_sid', 'guild_id', 'name_change', 'role_change', 'system_tag_override']
+
+    def __init__(self, row: aiosqlite.Row):
+        self.pk_sid: str = row[0]
+        self.guild_id: int = row[1]
+        self.name_change: bool = bool(row[2])
+        self.role_change: bool = bool(row[3])
+        self.system_tag_override: Optional[str] = row[4]
+
 
 # We don't really NEED add_user_settings if we just use update_user_setting instead.
 # @db_deco
@@ -491,16 +534,15 @@ async def update_user_setting(db: str, pk_sid: str, guild_id: int, name_change: 
         await conn.commit()
 
 
+# NOT USED
 @db_deco
-async def get_allowable_roles(db: str, guild_id: int) -> Optional[AllowableRoles]:
+async def update_system_tag_override_user_setting(db: str, pk_sid: str, system_tag_override: str):
     async with aiosqlite.connect(db) as conn:
-        cursor = await conn.execute(" SELECT * from allowable_roles where guild_id = ?", (guild_id,))
-        raw_rows = await cursor.fetchall()
+        await conn.execute("""UPDATE user_settings
+                              SET system_tag_override = ?
+                              WHERE pk_sid = ? AND guild_is = ?""", (system_tag_override, pk_sid))
+        await conn.commit()
 
-        if len(raw_rows) == 0:
-            return None
-        allowable_roles = AllowableRoles(raw_rows)
-        return allowable_roles
 
 
 @db_deco
@@ -533,7 +575,7 @@ async def get_all_user_settings_from_discord_id(db: str, discord_user_id: int) -
         return all_user_settings
 
 @db_deco
-async def get_user_settings_from_discord_id(db: str, discord_user_id: str, guild_id: int) -> Optional[UserSettings]:
+async def get_user_settings_from_discord_id(db: str, discord_user_id: int, guild_id: int) -> Optional[UserSettings]:
     async with aiosqlite.connect(db) as conn:
         # cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? AND guild_id = ? COLLATE NOCASE", (pk_sid, guild_id))
         cursor = await conn.execute("""
@@ -613,18 +655,20 @@ async def migrate_to_latest(db: str):
                 log.warning(f"Tables have been migrated to version 1")
 
             if user_version[0] == 1:
+                # I messed up.... Now we need tto keep this do nothing migratioon here...
                 log.warning(f"Migrating Tables to version 2")
+                await conn.execute(f"PRAGMA user_version = 2")
+
+            if user_version[0] == 2:
+                log.warning(f"Migrating Tables to version 3")
+
                 await conn.execute('''
-                                      alter table systems
-                                      add pk_system_tag text default NULL;
-                                    ''')
-                await conn.execute('''
-                                      alter table systems
+                                      alter table user_settings
                                       add system_tag_override text default NULL;
                                     ''')
-                # Set DB to next version
-                await conn.execute(f"PRAGMA user_version = 2")
-                log.warning(f"Tables have been migrated to version 2")
+            #     # Set DB to next version
+                await conn.execute(f"PRAGMA user_version = 3")
+                log.warning(f"Tables have been migrated to version 3")
 
 
 @db_deco
@@ -641,7 +685,7 @@ async def create_tables(db: str):
                               );
                         ''')
                               #pk_system_tag        TEXT DEFAULT NULL,
-                              #system_tag_override  TEXT DEFAULT NULL
+                              #system_tag_override  TEXT DEFAULT NULL  # NOT USED, DO NOT INCLUDE IN PSQL MIGRATION
 
         await conn.execute('''
                                CREATE TABLE if not exists members  (
@@ -699,6 +743,18 @@ async def create_tables(db: str):
                                name_change          boolean default FALSE,
                                role_change          boolean default TRUE,
                                PRIMARY KEY (pk_sid, guild_id)
+                            );
+                        ''')
+                            # system_tag_override  TEXT DEFAULT NULL
+
+        await conn.execute('''
+                               CREATE TABLE if not exists guild_settings  (
+                               guild_id             bigint PRIMARY KEY ,
+                               name_change          boolean default TRUE,
+                               role_change          boolean default TRUE,
+                               log_channel          bigint default null,
+                               name_logging         boolean default TRUE,
+                               role_logging         boolean default TRUE
                             );
                         ''')
 

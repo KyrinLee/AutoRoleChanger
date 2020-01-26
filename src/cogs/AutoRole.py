@@ -4,8 +4,11 @@
 
 import asyncio
 import logging
+import inspect
 import re
-from typing import TYPE_CHECKING, Optional, Dict, List, Union
+from typing import TYPE_CHECKING, Optional, Dict, List, Union, Tuple, NamedTuple
+from collections import namedtuple
+from datetime import datetime, timedelta
 
 import discord
 from discord.ext import tasks, commands
@@ -15,6 +18,8 @@ import db
 
 import cogs.utils.pluralKit as pk
 import cogs.utils.reactMenu as reactMenu
+from cogs.utils.paginator import FieldPages
+from cogs.utils.autoRoleUtils import parse_csv_roles, ParsedRoles
 
 from cogs.utils.dLogger import dLogger
 from botExceptions import UnsupportedGuild
@@ -23,7 +28,7 @@ if TYPE_CHECKING:
     from discordBot import PNBot
 
 log = logging.getLogger(__name__)
-authorized_guilds = [433446063022538753]
+authorized_guilds = [433446063022538753, 624361300327268363]
 
 """
 TODO:
@@ -56,7 +61,6 @@ class AutoRoleChanger(commands.Cog):
         self.db = bot.db
         self.bot = bot
 
-
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         author: Union[discord.Member, discord.User] = message.author
@@ -76,7 +80,7 @@ class AutoRoleChanger(commands.Cog):
                 # Once an hour, make sure that the entire systems info is updated.
                 # This done based off the last updated time in the DB
                 # await self.update_members(message=message, time_override=60 * 60)
-                await self.update_system_members(db_expiration_age=60*60, message=message) # Update from any message once an hour (The default time)
+                await self.update_system_members(db_expiration_age=60*60, message=message)# Update from any message once an hour (The default time)
 
     # async def update_member(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None, message: Optional[discord.Message] = None):
     #     if ctx is not None:
@@ -252,7 +256,7 @@ class AutoRoleChanger(commands.Cog):
             discord_member: discord.Member = message.author
 
         # We will try several methods to get the PK System ID. Set it to None for now, so we can know to stop trying...
-        system_id = None
+        stale_members = system_id = None
         if not force_member_update and not force_discord_update:
             # Try to get any members that are past the expiration age.
             # This is only to see if enough time has passed.
@@ -262,6 +266,7 @@ class AutoRoleChanger(commands.Cog):
             if stale_members is None:
                 # It's not soon enough to try to do a full update. Bail for now.
                 return
+            await self.info(f"DB info is STALE ({round((datetime.utcnow().timestamp() - stale_members[0]['last_update'])/60)} min) for {stale_members[0]['member_name']}")
             system_id = stale_members[0]['pk_sid']
 
         # We need to get the stored fronters from the DB at this point.
@@ -283,38 +288,77 @@ class AutoRoleChanger(commands.Cog):
 
         # We definitely have a system_id at this point, start calling the PK API.
         # Get Fresh members and fronters
-        updated_members = await self.get_system_members(system_id)
+        # TODO: Do not get a full update of members on EVERY update...
+        #  The only time that we need upto date info on all system members is when commands are being used to ensure proper lookup of members..
+        try:
+            updated_members = await self.get_system_members(system_id)
+        except MemberListHidden:
+            # TODO: Instead of silently failing, try to DM the discord account to alert them to the problem, then unregister the user.
+            return
+
         updated_fronters = await self.get_fronters(system_id)  # TODO: Ask alyssa & astrid about using GET /s/<id>/switches[?before=] first.
 
         # Update the DB with the new information.
         # TODO: Compare with the stale information and only update what has changed.
         for update_member in updated_members:
+            # TODO: When we stop updating all members, we will need to maybe set all members to not fronting THEN set the members that are frontring to fronting.
+            #  Alternatively, we could have a fronting table... Then we could just delete the members from the table, and add the current ones....
             fronting = True if update_member in updated_fronters.members else False
             await db.update_member(self.db, system_id, update_member.hid, update_member.name, fronting=fronting)
         await self.info(f"Updated members for {discord_member.name}")
 
+        # TODO: The below code seems to be broken and deletes members when it should not. Fix.
+        # Clean up the DB and remove and remove any members that no longer exist (or are private at this point)
+        # We are going to go off the stale_member data as this doesn't need to happen EVERY time.
+        # if stale_members is not None:
+        #     for stale_member in stale_members:
         #
+        #         found = False
+        #         for updated_member in updated_members:
+        #             if stale_member == updated_member:
+        #                 found = True
+        #                 break
+        #         if not found:
+        #             await self.warning(f"DELETING member in {discord_member.name}'s system: {stale_member}")
+        #             await db.delete_member(self.db, stale_member['pk_sid'], stale_member['pk_mid'])
+
+        # Put the stale_fronters into a better format for logging...
+        log_stale_fronters = [fronter.hid for fronter in stale_fronters] if stale_fronters is not None else None
         if force_discord_update or stale_fronters is None or stale_fronters != updated_fronters.members:
-            await self.info(f"Fronters changed!: Prev: {stale_fronters}, \nCur: {updated_fronters}")
+
+            await self.info(f"Fronters changed!: Prev: {log_stale_fronters}, \n\nCur: {updated_fronters}")
 
             roles = []
             for fronter in updated_fronters.members:
-                new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[
-                    0])  # Force using only authorised guild for now.# discord_member.guild.id)
+                new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now.# discord_member.guild.id)
                 if new_roles is not None:
                     new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
                     roles.extend(new_roles_ids)
 
-            new_name = updated_fronters.members[0].proxied_name if len(updated_fronters.members) > 0 else None
-            await self.autochange_discord_user(discord_member, roles, new_name)
+            await self.autochange_discord_user(discord_member, system_id, roles, updated_fronters)
         else:
             await self.info(f"Not updating roles: force_discord_update:{force_discord_update}, "
-                            f"\n stale_fronters: {stale_fronters} "
+                            f"\nstale_fronters: {log_stale_fronters} "
                             f"\nupdated_fronters.members: {updated_fronters.members}"
                             f"\nComparison: {stale_fronters != updated_fronters.members}")
 
+    async def update_system(self, discord_id: Optional[int] = None, system_id: Optional[str] = None) -> pk.System:
 
-    async def autochange_discord_user(self,  discord_member: Union[discord.Member, discord.User], new_roles: List[Union[discord.Role, discord.Object]], new_name: Optional[str]):
+        # TODO: See if a system tag override is set and if so don't call PK API
+        # TODO: Implement Caching.
+        if system_id:
+            updated_system = await self.get_system(system_id)
+        elif discord_id:
+            updated_system = await self.get_system_by_discord_id(discord_id)
+        else:
+            raise SyntaxError("Either the discord_id &/or system id MUST be passed.")
+
+        # Update the db
+        await db.update_system_by_pk_sid(self.db, updated_system.hid, updated_system.name, updated_system.tag)
+
+        return updated_system
+
+    async def autochange_discord_user(self,  discord_member: Union[discord.Member, discord.User], pk_system_id: str, new_roles: List[Union[discord.Role, discord.Object]], updated_fronters: Optional[pk.Fronters]):
         """Applies the new roles and name to the selected discord user"""
 
         # guild: discord.Guild = discord_member.guild
@@ -324,19 +368,19 @@ class AutoRoleChanger(commands.Cog):
         else:
             guild: discord.Guild = self.bot.get_guild(authorized_guilds[0])
             if guild is None:
-                await self.info(f"Could not get guild in autochange_discord_user")
+                await self.info(f"Can not set roles/name! User was not in the authorized guild!")
                 return
 
             member_id = discord_member.id
             discord_member = guild.get_member(member_id)
             if discord_member is None:
-                await self.info(f"Could not get discord_member {member_id} in autochange_discord_user")
+                await self.info(f"Can not set roles/name! Unable to get discord_member {member_id} in autochange_discord_user")
                 return
 
         user_settings = await db.get_user_settings_from_discord_id(self.db, discord_member.id, guild.id)  # discord_member.guild.id)
 
         if user_settings.role_change:
-            await self.info(f"Setting {new_name}'s {len(new_roles)} role(s) on {discord_member.display_name}")
+            await self.info(f"Setting {discord_member.display_name}'s {len(new_roles)} role(s)")
 
             guild_allowed_auto_roles = await db.get_allowable_roles(self.db, guild.id)  # discord_member.guild.id)
 
@@ -353,13 +397,21 @@ class AutoRoleChanger(commands.Cog):
             except discord.errors.Forbidden:
                 await self.info(f"Could not set roles: {roles_to_set} on {discord_member.display_name}")
 
-        if user_settings.name_change and new_name is not None:
+        if user_settings.name_change and len(updated_fronters.members) > 0:  # TODO: Add option to set system name as nickname when no one is fronting.
+
+            if user_settings.system_tag_override is None:
+                updated_system = await self.update_system(system_id=pk_system_id)
+                system_tag = updated_system.tag
+            else:
+                system_tag = user_settings.system_tag_override
+
+            new_name = f"{updated_fronters.members[0].proxied_name} {system_tag}" if system_tag else updated_fronters.members[0].proxied_name
+
             await self.info(f"Changing {discord_member.display_name} name to {new_name}'s name")
             try:
                 await discord_member.edit(nick=new_name)
             except discord.errors.Forbidden:
-                await self.info(f"Could not change {discord_member.display_name}'s name")
-
+                await self.info(f"Forbidden! Could not change {discord_member.display_name}'s name")
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
@@ -370,15 +422,16 @@ class AutoRoleChanger(commands.Cog):
             await self.info(f"{after.nick} changed their nickname from {before.nick}, attempting to call: update_only_fronters")
 
             # Update in nickname change if 5 minutes have passed since the last update.
-            # await self.update_only_fronters(after)
-            await self.update_system_members(force_member_update=True, discord_member=after)
 
+            # We have very low threshold here so that way we don't get in the users way too much
+            # The limit IS needed however, if not only to prevent abuse,
+            # but to prevent update_system_members from being called twice when WE update the name
+            await self.update_system_members(discord_member=after, db_expiration_age=60 * 1)
 
     @commands.is_owner()
     @commands.command(name="crash")
     async def crash(self, ctx):
         assert 1 == 0
-
 
     # ----- Help & About Commands ----- #
 
@@ -410,7 +463,6 @@ class AutoRoleChanger(commands.Cog):
             embed.add_field(name="Tips", value="\n".join(tips), inline=False)
             await ctx.send(embed=embed)
             await ctx.send_help()
-
 
     @commands.command(name="get_started")
     async def getting_started(self, ctx):
@@ -468,7 +520,7 @@ class AutoRoleChanger(commands.Cog):
         if ctx.guild.id in authorized_guilds:
             user_settings = await db.get_user_settings_from_discord_id(self.db, ctx.author.id, ctx.guild.id)
             if not user_settings.role_change and not user_settings.name_change:
-                await ctx.send("You do not have roles or name changes enabled!")
+                await ctx.send(f"You do not have roles or name changes enabled! You can enable them with the **{self.bot.command_prefix}settings** command.")
             elif user_settings.role_change and user_settings.name_change:
                 await ctx.send("System updated! If your roles and name did not update, please try again in a minute.")
             elif user_settings.role_change:
@@ -479,7 +531,7 @@ class AutoRoleChanger(commands.Cog):
 
     # @is_authorized_guild()
     @commands.guild_only()
-    @commands.command(aliases=["list"], brief="See what roles are assigned to your system members.")
+    @commands.command(aliases=["list", "List_roles"], brief="See what roles are assigned to your system members.")
     async def list_member_roles(self, ctx: commands.Context):
         member_input = reactMenu.Page(reactMenu.ResponseType(1), name="List Roles",
                                       body="Please enter the name or ID of the System Member below:")
@@ -499,10 +551,9 @@ class AutoRoleChanger(commands.Cog):
             else:
                 await ctx.send(f"Could not find {member_input.response.content} in your system. Try using the 5 character Plural Kit ID.")
 
-
     # @is_authorized_guild()
     @commands.guild_only()
-    @commands.command(aliases=["list_all"], brief="See what roles are assigned to all of your system members.")
+    @commands.command(aliases=["list_all", "list_all_roles"], brief="See what roles are assigned to all of your system members.")
     async def list_all_member_roles(self, ctx: commands.Context):
 
         members = await db.get_members_by_discord_account(self.db, ctx.author.id)
@@ -512,28 +563,42 @@ class AutoRoleChanger(commands.Cog):
                 f"You do not have a Plural Kit account registered. Use `{self.bot.command_prefix}register` to register your system.")
             return
 
-        embed_size = 0
-        embed = discord.Embed()
-        embed_name = f"Everyones roles:"
-        embed_size += len(embed_name)
-        embed.set_author(name=embed_name)
-        if len(members) > 25:
-            description = "There are still bugs with displaying all member roles.\nResults have been truncated as a result."
-            embed.description = description
-            embed_size += len(description)
+        # largest_embed = 0
+        member_roles = []
         for member in members:
             roles = await db.get_roles_for_member_by_guild(self.db, member['pk_mid'], ctx.guild.id)
             if roles is not None:
-                roles_msg = ", ".join([f"<@&{role['role_id']}>" for role in roles])
-                embed_size += len(roles_msg)
+                role_msgs = []
+                role_strs = []
+                role_strs_len = 0
+                for role in roles:
+                    role_str = f"<@&{role['role_id']}>"
+                    if role_strs_len + len(role_str) + 2 <= 900:
+                        role_strs_len += len(role_str)
+                        role_strs.append(role_str)
+                    else:
+                        role_strs_len = len(role_str)
+                        role_msgs.append(", ".join(role_strs))
+                        role_strs.clear()
+                        role_strs.append(role_str)
+
+                if len(role_strs) > 0:
+                    role_msgs.append(", ".join(role_strs))
             else:
-                roles_msg = "No Roles!"
-                embed_size += len(roles_msg)
-            if embed_size < 5990:
-                embed.add_field(name=member['member_name'], value=roles_msg)
+                role_msgs = ["No Roles!"]
 
-        await ctx.send(embed=embed)
+            if len(role_msgs) > 1:
+                role_fields = 1
+                for msg in role_msgs:
+                    member_roles.append((f"{member['member_name']} ({role_fields}/{len(role_msgs)})", msg))
+                    role_fields += 1
+            else:
+                await self.warning(f"role_msgs: {role_msgs}, Member: {member}, roles: {roles}")
+                member_roles.append((f"{member['member_name']}", role_msgs[0]))
 
+        page = FieldPages(ctx, entries=member_roles, per_page=6)
+        page.embed.title = f"Roles:"
+        await page.paginate()
 
     @commands.guild_only()
     @commands.command(aliases=["remove_roles", "remove", "rm"], brief="Remove roles from system members.",
@@ -541,7 +606,6 @@ class AutoRoleChanger(commands.Cog):
     async def remove_role(self, ctx: commands.Context):
         settings = self.CSVRemoveRolesMenuHandler(self.bot, ctx)
         await settings.run()
-
 
     class CSVRemoveRolesMenuHandler:
 
@@ -578,46 +642,13 @@ class AutoRoleChanger(commands.Cog):
 
             await menu.run(self.bot, self.ctx)
 
-
         async def remove_role_from_all_members(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                                response: discord.Message):
-            csv_regex = "(.+?)(?:,|$)"
             role_text = response.content
-            if len(role_text) == 0:
+            roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text, self.allowable_roles)
+            if roles is None:
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
-
-            # Make sure that the string ends in a comma for proper regex detection
-            if role_text[-1] != ",":
-                role_text += ","
-
-            # Separate the roles using regex
-            raw_roles = re.findall(csv_regex, role_text)
-            if len(raw_roles) == 0:
-                await ctx.send("ERROR!!! Could not parse roles!")
-                return
-
-            good_roles = []
-            bad_roles = []
-            for raw_role in raw_roles:
-                # raw_role: str
-                try:
-                    # Make sure the role exists and is on the allowed list.
-                    potential_role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
-                    allowed = False
-                    for allowed_role_id in self.allowable_roles.role_ids:
-                        if allowed_role_id == potential_role.id:
-                            allowed = True
-                            break
-
-                    if not allowed:  # if its not allowed, put it on the bad list.
-                        bad_roles.append(raw_role)
-                    else:
-                        good_roles.append(potential_role)
-
-                except commands.errors.BadArgument:
-                    # Role could not be found. Add to bad list.
-                    bad_roles.append(raw_role)
 
             members = await db.get_members_by_discord_account(self.db, ctx.author.id)  # ctx.author.id)
             if members is None or len(members) == 0:
@@ -626,24 +657,29 @@ class AutoRoleChanger(commands.Cog):
                     f"You do not have a Plural Kit account registered. Use `{self.bot.command_prefix}register` to register your system.")
                 return
 
-            for role in good_roles:
+            for role in roles.good_roles:
                 for member in members:
                     await db.remove_role_from_member(self.db, ctx.guild.id, member['pk_mid'], role.id)
 
             # Construct embed to tell the user of the successes and failures.
             embed = discord.Embed()
-            embed.set_author(name=f"Roles removed from all members:")
+            embed = discord.Embed(title=f"Removed {len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles) + len(roles.disallowed_roles)} roles from all members:")
 
-            if len(good_roles) > 0:
-                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in good_roles])
+            if len(roles.good_roles) > 0:
+                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.good_roles])
                 embed.add_field(name="Successfully removed:", value=good_roles_msg)
 
-            if len(bad_roles) > 0:
-                bad_roles_msg = ", ".join([f"{role}" for role in bad_roles])
+            if len(roles.bad_roles) > 0:
+                bad_roles_msg = ", ".join([f"{role}" for role in roles.bad_roles])
                 embed.add_field(
-                    name="Could not find and remove the following (check spelling and capitalization)\n"
-                         "It is possible they are not on the list of allowed Auto Changeable roles",
+                    name="Could not find and remove the following (check spelling and capitalization)",
                     value=bad_roles_msg)
+
+            if len(roles.disallowed_roles) > 0:
+                disallowed_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.disallowed_roles])
+                embed.add_field(name="These roles are not allowed to be removed by ARC. "
+                                     "(They *may* still be able to be removed from your account by this servers standard role setting bot or staff):",
+                                value=disallowed_roles_msg)
 
             await ctx.send(embed=embed)
 
@@ -652,7 +688,6 @@ class AutoRoleChanger(commands.Cog):
                                              body="Click ✅ or ❌",
                                              callback=self.remove_role_from_all_members_cont)
             await ask_to_remove_more.run(client, ctx)
-
 
         async def remove_role_from_all_members_cont(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                                     response: bool):
@@ -680,7 +715,6 @@ class AutoRoleChanger(commands.Cog):
                                               timeout=300)
                 await remove_roles.run(self.bot, ctx)
 
-
         async def remove_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                               response: discord.Message):
 
@@ -688,60 +722,32 @@ class AutoRoleChanger(commands.Cog):
                 await self.ctx.send("There are no Auto changeable roles set up for this guild!")
                 return
 
-            csv_regex = "(.+?)(?:,|$)"
             role_text = response.content
-            if len(role_text) == 0:
+            roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text, self.allowable_roles)
+            if roles is None:
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
 
-            # Make sure that the string ends in a comma for proper regex detection
-            if role_text[-1] != ",":
-                role_text += ","
-
-            # log.info(role_text)
-            raw_roles = re.findall(csv_regex, role_text)
-            if len(raw_roles) == 0:
-                await ctx.send("ERROR!!! Could not parse roles!")
-                return
-            # log.info(raw_roles)
-            good_roles = []
-            bad_roles = []
-            for raw_role in raw_roles:
-                # raw_role: str
-                try:
-                    # Make sure the role exists and is on the allowed list.
-                    potential_role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
-                    allowed = False
-                    for allowed_role_id in self.allowable_roles.role_ids:
-                        if allowed_role_id == potential_role.id:
-                            allowed = True
-                            break
-
-                    if not allowed:  # if its not allowed, put it on the bad list.
-                        bad_roles.append(raw_role)
-                    else:
-                        good_roles.append(potential_role)
-
-                except commands.errors.BadArgument:
-                    # Role could not be found. Add to bad list.
-                    bad_roles.append(raw_role)
-
-            for role in good_roles:
+            for role in roles.good_roles:
                 await db.remove_role_from_member(self.db, ctx.guild.id, self.member['pk_mid'], role.id)
 
             # Construct embed to tell the user of the successes and failures.
-            embed = discord.Embed()
-            embed.set_author(name=f"Roles removed from {self.member['member_name']}:")
+            embed = discord.Embed(title=f"Removed {len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles) + len(roles.disallowed_roles)} roles from {self.member['member_name']}:")
 
-            if len(good_roles) > 0:
-                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in good_roles])
+            if len(roles.good_roles) > 0:
+                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.good_roles])
                 embed.add_field(name="Successfully removed:", value=good_roles_msg)
 
-            if len(bad_roles) > 0:
-                bad_roles_msg = ", ".join([f"{role}" for role in bad_roles])
+            if len(roles.bad_roles) > 0:
+                bad_roles_msg = ", ".join([f"{role}" for role in roles.bad_roles])
                 embed.add_field(
-                    name="Could not find and add the following (check spelling and capitalization):",
+                    name="Could not find and remove the following (check spelling and capitalization):",
                     value=bad_roles_msg)
+
+            if len(roles.disallowed_roles) > 0:
+                disallowed_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.disallowed_roles])
+                embed.add_field(name="These roles are not allowed to be removed by ARC. "
+                                     "(They *may* still be able to be removed from your account by this servers standard role setting bot or staff):", value=disallowed_roles_msg)
 
             await ctx.send(embed=embed)
 
@@ -761,7 +767,6 @@ class AutoRoleChanger(commands.Cog):
                 await remove_another_role.run(client, ctx)
             else:
                 await ctx.send("Finished removing roles!")
-
 
     @is_authorized_guild()
     @commands.guild_only()
@@ -816,7 +821,6 @@ class AutoRoleChanger(commands.Cog):
 
             await menu.run(self.bot, self.ctx)
 
-
         async def list_allowable_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context):
             """Sends embed with all the allowable roles."""
 
@@ -843,43 +847,11 @@ class AutoRoleChanger(commands.Cog):
                                              body="Click ✅ or ❌",
                                              callback=self.add_role_to_all_members_cont)
 
-            csv_regex = "(.+?)(?:,|$)"
             role_text = response.content
-            if len(role_text) == 0:
+            roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text, self.allowable_roles)
+            if roles is None:
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
-
-            # Make sure that the string ends in a comma for proper regex detection
-            if role_text[-1] != ",":
-                role_text += ","
-
-            # log.info(role_text)
-            raw_roles = re.findall(csv_regex, role_text)
-            if len(raw_roles) == 0:
-                await ctx.send("ERROR!!! Could not parse roles!")
-                return
-            # log.info(raw_roles)
-            good_roles = []
-            bad_roles = []
-            for raw_role in raw_roles:
-                # raw_role: str
-                try:
-                    # Make sure the role exists and is on the allowed list.
-                    potential_role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
-                    allowed = False
-                    for allowed_role_id in self.allowable_roles.role_ids:
-                        if allowed_role_id == potential_role.id:
-                            allowed = True
-                            break
-
-                    if not allowed:  # if its not allowed, put it on the bad list.
-                        bad_roles.append(raw_role)
-                    else:
-                        good_roles.append(potential_role)
-
-                except commands.errors.BadArgument:
-                    # Role could not be found. Add to bad list.
-                    bad_roles.append(raw_role)
 
             members = await db.get_members_by_discord_account(self.db, ctx.author.id)  # ctx.author.id)
             if members is None or len(members) == 0:
@@ -887,30 +859,34 @@ class AutoRoleChanger(commands.Cog):
                     f"You do not have a Plural Kit account registered. Use `{self.bot.command_prefix}register` to register your system.")
                 return
 
-            for role in good_roles:
+            for role in roles.good_roles:
                 for member in members:
                     await db.add_role_to_member(self.db, ctx.guild.id, member['pk_mid'], member['pk_sid'], role.id)
 
                 # await ctx.send(f"Added **{role.name}** to all registered system members!")
 
             # Construct embed to tell the user of the successes and failures.
-            embed = discord.Embed()
-            embed.set_author(name=f"Roles added to all members:")
+            embed = discord.Embed(
+                title=f"Added {len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles) + len(roles.disallowed_roles)} roles to all members:")
 
-            if len(good_roles) > 0:
-                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in good_roles])
+            if len(roles.good_roles) > 0:
+                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.good_roles])
                 embed.add_field(name="Successfully added:", value=good_roles_msg)
 
-            if len(bad_roles) > 0:
-                bad_roles_msg = ", ".join([f"{role}" for role in bad_roles])
+            if len(roles.bad_roles) > 0:
+                bad_roles_msg = ", ".join([f"{role}" for role in roles.bad_roles])
                 embed.add_field(
                     name="Could not find and add the following (check spelling and capitalization):",
                     value=bad_roles_msg)
 
+            if len(roles.disallowed_roles) > 0:
+                disallowed_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.disallowed_roles])
+                embed.add_field(name="These roles are not allowed to be set by ARC. "
+                                     "(They *may* still be able to be statically applied to your account by this servers standard role setting bot or staff):", value=disallowed_roles_msg)
+
             await ctx.send(embed=embed)
 
             await ask_to_add_more.run(client, ctx)
-
 
         async def add_role_to_all_members_cont(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                                response: bool):
@@ -937,7 +913,6 @@ class AutoRoleChanger(commands.Cog):
                                            callback=self.verify_set_all_roles)
                 await verify_prompt.run(self.bot, ctx)
 
-
         async def verify_set_all_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                        response: bool):
             if response:
@@ -961,7 +936,6 @@ class AutoRoleChanger(commands.Cog):
                                            timeout=300)
                 await add_roles.run(self.bot, ctx)
 
-
         async def add_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                            response: discord.Message):
 
@@ -974,65 +948,37 @@ class AutoRoleChanger(commands.Cog):
                                              body="Click ✅ or ❌",
                                              callback=self.add_role_cont)
 
-            csv_regex = "(.+?)(?:,|$)"
             role_text = response.content
-            if len(role_text) == 0:
+            roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text, self.allowable_roles)
+            if roles is None:
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
 
-            # Make sure that the string ends in a comma for proper regex detection
-            if role_text[-1] != ",":
-                role_text += ","
-
-            # log.info(role_text)
-            raw_roles = re.findall(csv_regex, role_text)
-            if len(raw_roles) == 0:
-                await ctx.send("ERROR!!! Could not parse roles!")
-                return
-            # log.info(raw_roles)
-            good_roles = []
-            bad_roles = []
-            for raw_role in raw_roles:
-                # raw_role: str
-                try:
-                    # Make sure the role exists and is on the allowed list.
-                    potential_role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
-                    allowed = False
-                    for allowed_role_id in self.allowable_roles.role_ids:
-                        if allowed_role_id == potential_role.id:
-                            allowed = True
-                            break
-
-                    if not allowed:  # if its not allowed, put it on the bad list.
-                        bad_roles.append(raw_role)
-                    else:
-                        good_roles.append(potential_role)
-
-                except commands.errors.BadArgument:
-                    # Role could not be found. Add to bad list.
-                    bad_roles.append(raw_role)
-
-            for role in good_roles:
+            for role in roles.good_roles:
                 await db.add_role_to_member(self.db, ctx.guild.id, self.member['pk_mid'], self.member['pk_sid'], role.id)
 
             # Construct embed to tell the user of the successes and failures.
-            embed = discord.Embed()
-            embed.set_author(name=f"Roles added to {self.member['member_name']}")
+            embed = discord.Embed(
+                title=f"{len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles) + len(roles.disallowed_roles)} roles added to {self.member['member_name']}:")
 
-            if len(good_roles) > 0:
-                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in good_roles])
+            if len(roles.good_roles) > 0:
+                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.good_roles])
                 embed.add_field(name="Successfully added:", value=good_roles_msg)
 
-            if len(bad_roles) > 0:
-                bad_roles_msg = ", ".join([f"{role}" for role in bad_roles])
+            if len(roles.bad_roles) > 0:
+                bad_roles_msg = ", ".join([f"{role}" for role in roles.bad_roles])
                 embed.add_field(
                     name="Could not find and add the following (check spelling and capitalization):",
                     value=bad_roles_msg)
 
+            if len(roles.disallowed_roles) > 0:
+                disallowed_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.disallowed_roles])
+                embed.add_field(name="These roles are not allowed to be set by ARC. "
+                                     "(They *may* still be able to be statically applied to your account by this servers standard role setting bot or staff):", value=disallowed_roles_msg)
+
             await ctx.send(embed=embed)
 
             await ask_to_add_more.run(client, ctx)
-
 
         async def add_role_cont(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                             response: bool):
@@ -1044,6 +990,21 @@ class AutoRoleChanger(commands.Cog):
             else:
                 await ctx.send("Finished adding roles!")
 
+    @commands.is_owner()
+    @commands.command(hidden=True)
+    async def debug_settings(self, ctx: commands.Context, member_id: int):
+
+        user_settings = await db.get_user_settings_from_discord_id(self.db, member_id, authorized_guilds[0])
+        if not user_settings:
+            await ctx.send(f"{member_id} has no settings.")
+            return
+
+        auto_name = "On" if user_settings.name_change else "Off"
+        auto_role = "On" if user_settings.role_change else "Off"
+        system_tag_override = user_settings.system_tag_override or "Not Set"
+
+        msg = f"Auto name: {auto_name}, Auto Roles: {auto_role}, tag override: {system_tag_override}"
+        await ctx.send(msg)
 
     @is_authorized_guild()
     @commands.guild_only()
@@ -1052,7 +1013,6 @@ class AutoRoleChanger(commands.Cog):
     async def settings(self, ctx: commands.Context):
         settings = self.UserSettingsRolesMenuHandler(self.bot, ctx)
         await settings.run()
-
 
     class UserSettingsRolesMenuHandler:
         """
@@ -1069,7 +1029,6 @@ class AutoRoleChanger(commands.Cog):
 
             self.current_user_settings: Optional[db.UserSettings] = None
 
-
         async def run(self):
             self.current_user_settings = await db.get_user_settings_from_discord_id(self.db, self.ctx.author.id, self.ctx.guild.id)
             if self.current_user_settings is None:
@@ -1079,6 +1038,7 @@ class AutoRoleChanger(commands.Cog):
 
             auto_name = "On" if self.current_user_settings.name_change else "Off"
             auto_role = "On" if self.current_user_settings.role_change else "Off"
+            system_tag_override = self.current_user_settings.system_tag_override or "Not Set"
 
             name_change = reactMenu.Page(reactMenu.ResponseType(2), name="Toggle Auto Name Change",
                                          body=f"Toggles the automatic name change functionality. Currently **{auto_name}**",
@@ -1091,12 +1051,17 @@ class AutoRoleChanger(commands.Cog):
                                          additional="Click ✅ to toggle automatic role changes, or click ❌ to cancel",
                                          callback=self.role_change)
 
+            # set_system_tag_override = reactMenu.Page(reactMenu.ResponseType(2),
+            #                              name="Set/Remove an alternative system tag",
+            #                              body=f"Toggles the automatic role change functionality. Currently **{auto_role}**",
+            #                              additional="Click ✅ to toggle automatic role changes, or click ❌ to cancel",
+            #                              callback=self.set_system_tag_override)
+
             menu = reactMenu.Menu(name="Auto Role User Settings",
                                   body="Please select an option below by sending a message with the number",
-                                  pages=[name_change, role_change])  # , add_roles_from_discord_user])
+                                  pages=[name_change, role_change]) #, set_system_tag_override])
 
             await menu.run(self.bot, self.ctx)
-
 
         async def name_change(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                               response: bool):
@@ -1110,7 +1075,6 @@ class AutoRoleChanger(commands.Cog):
                 await self.ctx.send(f"Automatic name changes are now **{new_name_setting_text}**")
             else:
                 await self.ctx.send(f"Canceled!")
-
 
         async def role_change(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                               response: bool):
@@ -1135,7 +1099,6 @@ class AutoRoleChanger(commands.Cog):
     async def admin_settings(self, ctx: commands.Context):
         settings = self.AdminSettingsRolesMenuHandler(self.bot, ctx)
         await settings.run()
-
 
     class AdminSettingsRolesMenuHandler:
 
@@ -1171,7 +1134,6 @@ class AutoRoleChanger(commands.Cog):
 
             await menu.run(self.bot, self.ctx)
 
-
         async def list_allowable_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context):
             """Sends embed with all the allowable roles."""
 
@@ -1186,52 +1148,58 @@ class AutoRoleChanger(commands.Cog):
             embed.description = roles_msg
             await ctx.send(embed=embed)
 
-
         async def add_allowable_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                                response: discord.Message):
             """Add more roles to the list of usable roles"""
-            csv_regex = "(.+?)(?:,|$)"
-            role_text = response.content
-            if len(role_text) == 0:
-                await ctx.send("ERROR!!! Could not parse roles!")
-                return
 
-            # Make sure that the string ends in a comma for proper regex detection
-            if role_text[-1] != ",":
-                role_text += ","
-            log.info(role_text)
-            raw_roles = re.findall(csv_regex, role_text)
-            if len(raw_roles) == 0:
-                await ctx.send("ERROR!!! Could not parse roles!")
-                return
-            log.info(raw_roles)
-            good_roles = []
-            bad_roles = []
-            for raw_role in raw_roles:
-                raw_role: str
-                try:
-                    # add identifiable roles to the good list
-                    # Todo: Try to match up Snowflake like raw roles to the roles in self.allowable_roles and bypass the RoleConverter on success.
-                    role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
-                    good_roles.append(role)
-                except commands.errors.BadArgument:
-                    # Role could not be found. Add to bad list.
-                    bad_roles.append(raw_role)
+            role_text = response.content
+
+            # csv_regex = "(.+?)(?:,|$)"
+            # if len(role_text) == 0:
+            #     await ctx.send("ERROR!!! Could not parse roles!")
+            #     return
+            #
+            # # Make sure that the string ends in a comma for proper regex detection
+            # if role_text[-1] != ",":
+            #     role_text += ","
+            # log.info(role_text)
+            # raw_roles = re.findall(csv_regex, role_text)
+            # if len(raw_roles) == 0:
+            #     await ctx.send("ERROR!!! Could not parse roles!")
+            #     return
+            # log.info(raw_roles)
+            # good_roles = []
+            # bad_roles = []
+            # for raw_role in raw_roles:
+            #     raw_role: str
+            #     try:
+            #         # add identifiable roles to the good list
+            #         # Todo: Try to match up Snowflake like raw roles to the roles in self.allowable_roles and bypass the RoleConverter on success.
+            #         role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
+            #         good_roles.append(role)
+            #     except commands.errors.BadArgument:
+            #         # Role could not be found. Add to bad list.
+            #         bad_roles.append(raw_role)
 
             # Add all the good roles to the DB
-            for role in good_roles:
+
+            roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text)
+            if roles is None:
+                await ctx.send("ERROR!!! Could not parse roles!")
+                return
+
+            for role in roles.good_roles:
                 await db.add_allowable_role(self.db, ctx.guild.id, role.id)
 
             # Construct embed to tell the user of the successes and failures.
-            embed = discord.Embed()
-            embed.set_author(name=f"Roles Added to list:")
+            embed = discord.Embed(title=f"{len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles)} roles added to the allowed list:")
 
-            if len(good_roles) > 0:
-                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in good_roles])
+            if len(roles.good_roles) > 0:
+                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.good_roles])
                 embed.add_field(name="Successfully added:", value=good_roles_msg)
 
-            if len(bad_roles) > 0:
-                bad_roles_msg = ", ".join([f"{role}" for role in bad_roles])
+            if len(roles.bad_roles) > 0:
+                bad_roles_msg = ", ".join([f"{role}" for role in roles.bad_roles])
                 embed.add_field(name="Could not find and add the following (check spelling and capitalization):", value=bad_roles_msg)
 
             await ctx.send(embed=embed)
@@ -1239,51 +1207,53 @@ class AutoRoleChanger(commands.Cog):
         async def remove_allowable_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                                response: discord.Message):
             """Remove roles from the list of usable roles"""
-            csv_regex = "(.+?)(?:,|$)"
+
             role_text = response.content
-            if len(role_text) == 0:
-                await ctx.send("ERROR!!! Could not parse roles!")
-                return
-
-            # Make sure that the string ends in a comma for proper regex detection
-            if role_text[-1] != ",":
-                role_text += ","
-
-            raw_roles = re.findall(csv_regex, role_text)
-            if len(raw_roles) == 0:
-                await ctx.send("ERROR!!! Could not parse roles!")
-                return
-
-            good_roles = []
-            bad_roles = []
-            for raw_role in raw_roles:
-                try:
-                    # add identifiable roles to the good list
-                    # Todo: Try to match up Snowflake like raw roles to the roles in self.allowable_roles and bypass the RoleConverter on success.
-                    role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
-                    good_roles.append(role)
-                except commands.errors.BadArgument:
-                    # Role could not be found. Add to bad list.
-                    bad_roles.append(raw_role)
+            #
+            # csv_regex = "(.+?)(?:,|$)"
+            # if len(role_text) == 0:
+            #     await ctx.send("ERROR!!! Could not parse roles!")
+            #     return
+            #
+            # # Make sure that the string ends in a comma for proper regex detection
+            # if role_text[-1] != ",":
+            #     role_text += ","
+            #
+            # raw_roles = re.findall(csv_regex, role_text)
+            # if len(raw_roles) == 0:
+            #     await ctx.send("ERROR!!! Could not parse roles!")
+            #     return
+            #
+            # good_roles = []
+            # bad_roles = []
+            # for raw_role in raw_roles:
+            #     try:
+            #         # add identifiable roles to the good list
+            #         # Todo: Try to match up Snowflake like raw roles to the roles in self.allowable_roles and bypass the RoleConverter on success.
+            #         role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
+            #         good_roles.append(role)
+            #     except commands.errors.BadArgument:
+            #         # Role could not be found. Add to bad list.
+            #         bad_roles.append(raw_role)
 
             # Remove all the good roles from the DB
-            for role in good_roles:
+            roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text)
+            for role in roles.good_roles:
                 await db.remove_allowable_role(self.db, ctx.guild.id, role.id)
 
             # Construct embed to tell the user of the successes and failures.
-            embed = discord.Embed()
-            embed.set_author(name=f"Roles removed from the list:")
+            embed = discord.Embed(
+                title=f"{len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles)} roles removed from the allowed list:")
 
-            if len(good_roles) > 0:
-                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in good_roles])
+            if len(roles.good_roles) > 0:
+                good_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles.good_roles])
                 embed.add_field(name="Successfully removed:", value=good_roles_msg)
 
-            if len(bad_roles) > 0:
-                bad_roles_msg = ", ".join([f"{role}" for role in bad_roles])
+            if len(roles.bad_roles) > 0:
+                bad_roles_msg = ", ".join([f"{role}" for role in roles.bad_roles])
                 embed.add_field(name="Could not find and remove the following (check spelling and capitalization):", value=bad_roles_msg)
 
             await ctx.send(embed=embed)
-
 
     @is_authorized_guild()
     @commands.guild_only()
@@ -1448,12 +1418,14 @@ class AutoRoleChanger(commands.Cog):
 
     async def info(self, msg):
         """Info Logger"""
-        log.info(msg)
+        func = inspect.currentframe().f_back.f_code
+        log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
         await self.bot.dLog.info(msg, header=f"[{__name__}]")
 
-
     async def warning(self, msg):
-        log.warning(msg)
+        # log.warning(msg)
+        func = inspect.currentframe().f_back.f_code
+        log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
         await self.bot.dLog.warning(msg, header=f"[{__name__}]")
 
 

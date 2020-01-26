@@ -13,6 +13,8 @@ from cogs.utils.dLogger import dLogger
 import embeds
 from botExceptions import UnsupportedGuild
 
+from cogs.utils import ext_menus as menus
+
 log = logging.getLogger("PNBot")
 
 extensions = (
@@ -34,16 +36,14 @@ class PNBot(commands.Bot):
         self.dLog = dLogger(self)
         self.remove_command("help")  # Remove the built in help command so we can make the about section look nicer.
 
-
     def load_cogs(self):
         for extension in extensions:
             try:
                 self.load_extension(extension)
                 log.info(f"Loaded {extension}")
             except Exception as e:
-                print(f'Failed to load extension {extension}.', file=sys.stderr)
+                log.info(f'Failed to load extension {extension}.', file=sys.stderr)
                 traceback.print_exc()
-
 
     async def on_ready(self):
 
@@ -54,9 +54,7 @@ class PNBot(commands.Bot):
 
         activity = discord.Game("{}help".format(self.command_prefix))
         await self.change_presence(status=discord.Status.online, activity=activity)
-
         await self.dLog.initialize_logger(self.error_log_channel_id, self.warning_log_channel_id, self.info_log_channel_id)
-
 
     # ---- Command Error Handling ----- #
     # @client.event
@@ -82,7 +80,6 @@ class PNBot(commands.Bot):
             await ctx.send("⚠ {}".format(error))
             await self.dLog.error(error)
             raise error
-
 
     # @client.event
     async def on_error(self, event_name, *args):
@@ -110,16 +107,37 @@ class PNBot(commands.Bot):
         await asyncio.sleep(0.5)
         await self.dLog.error(traceback_msg2)
 
-
     async def on_guild_join(self, guild: discord.Guild):
         log_msg = "Auto Role Changer joined **{} ({})**, owned by:** {} - {}#{} ({})**".format(guild.name, guild.id, guild.owner.display_name, guild.owner.name, guild.owner.discriminator, guild.owner.id)
         log.warning(log_msg)
         await self.dLog.warning(log_msg, header=f"[{__name__}]")
 
+class MyMenu(menus.Menu):
+    class MyMenu(menus.Menu):
+        async def send_initial_message(self, ctx, channel):
+            return await channel.send(f'Hello {ctx.author}')
+
+        @menus.button('\N{THUMBS UP SIGN}')
+        async def on_thumbs_up(self, payload):
+            await self.message.edit(content=f'Thanks {self.ctx.author}!')
+
+        @menus.button('\N{THUMBS DOWN SIGN}')
+        async def on_thumbs_down(self, payload):
+            await self.message.edit(content=f"That's not nice {self.ctx.author}...")
+
+        @menus.button('\N{BLACK SQUARE FOR STOP}\ufe0f')
+        async def on_stop(self, payload):
+            self.stop()
+
 
 class Utilities(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    @commands.command(name="t")
+    async def menu_example(self, ctx):
+        m = MyMenu()
+        await m.start(ctx)
 
     @commands.command(name="invite",
                       brief="Get an invite link.")
