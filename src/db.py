@@ -747,15 +747,15 @@ async def create_tables(db: str):
                         ''')
                             # system_tag_override  TEXT DEFAULT NULL
 
-        await conn.execute('''
-                               CREATE TABLE if not exists guild_settings  (
-                               guild_id             bigint PRIMARY KEY ,
-                               name_change          boolean default TRUE,
-                               role_change          boolean default TRUE,
-                               log_channel          bigint default null,
-                               name_logging         boolean default TRUE,
-                               role_logging         boolean default TRUE
-                            );
-                        ''')
+        # await conn.execute('''
+        #                        CREATE TABLE if not exists guild_settings  (
+        #                        guild_id             bigint PRIMARY KEY ,
+        #                        name_change          boolean default TRUE,
+        #                        role_change          boolean default TRUE,
+        #                        log_channel          bigint default null,
+        #                        name_logging         boolean default TRUE,
+        #                        role_logging         boolean default TRUE
+        #                     );
+        #                 ''')
 
         await conn.execute("PRAGMA foreign_keys = 1")

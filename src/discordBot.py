@@ -13,8 +13,6 @@ from cogs.utils.dLogger import dLogger
 import embeds
 from botExceptions import UnsupportedGuild
 
-from cogs.utils import ext_menus as menus
-
 log = logging.getLogger("PNBot")
 
 extensions = (
@@ -112,32 +110,10 @@ class PNBot(commands.Bot):
         log.warning(log_msg)
         await self.dLog.warning(log_msg, header=f"[{__name__}]")
 
-class MyMenu(menus.Menu):
-    class MyMenu(menus.Menu):
-        async def send_initial_message(self, ctx, channel):
-            return await channel.send(f'Hello {ctx.author}')
-
-        @menus.button('\N{THUMBS UP SIGN}')
-        async def on_thumbs_up(self, payload):
-            await self.message.edit(content=f'Thanks {self.ctx.author}!')
-
-        @menus.button('\N{THUMBS DOWN SIGN}')
-        async def on_thumbs_down(self, payload):
-            await self.message.edit(content=f"That's not nice {self.ctx.author}...")
-
-        @menus.button('\N{BLACK SQUARE FOR STOP}\ufe0f')
-        async def on_stop(self, payload):
-            self.stop()
-
 
 class Utilities(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
-    @commands.command(name="t")
-    async def menu_example(self, ctx):
-        m = MyMenu()
-        await m.start(ctx)
 
     @commands.command(name="invite",
                       brief="Get an invite link.")
