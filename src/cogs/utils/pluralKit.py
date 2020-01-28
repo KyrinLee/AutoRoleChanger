@@ -14,7 +14,6 @@ from discord.ext import commands
 
 import aiohttp
 
-import db
 
 log = logging.getLogger(__name__)
 

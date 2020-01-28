@@ -19,7 +19,7 @@ class Dev(commands.Cog):
     def __init__(self, bot):
 
         self.bot: commands.Bot = bot
-        self.db = bot.db
+        self.pool = bot.pool
 
     @commands.command(hidden=True)
     async def load(self, ctx, *, module):

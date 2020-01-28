@@ -5,6 +5,17 @@ services:
       entrypoint:
       - python
       - start_bot.py
+#      - sqlite_migration.py
       volumes:
         - "./data/botDB.sqlite:/app/botDB.sqlite"
+      depends_on:
+        - db
       restart: always
+   db:
+      image: postgres:12-alpine
+      volumes:
+        - "arc_db_data:/var/lib/postgresql/data"
+      restart: always
+
+volumes:
+   arc_db_data:

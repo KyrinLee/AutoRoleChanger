@@ -14,7 +14,9 @@ import discord
 from discord.ext import tasks, commands
 
 import aiohttp
-import db
+
+# import db as sqliteDB
+import postgresDB as db
 
 import cogs.utils.pluralKit as pk
 import cogs.utils.reactMenu as reactMenu
@@ -28,7 +30,7 @@ if TYPE_CHECKING:
     from discordBot import PNBot
 
 log = logging.getLogger(__name__)
-authorized_guilds = [433446063022538753, 624361300327268363]
+authorized_guilds = None #[433446063022538753, 624361300327268363, 468794128340090890]
 
 """
 TODO:
@@ -47,7 +49,7 @@ def is_authorized_guild():
         if ctx.guild is None:  # Double check that we are not in a DM.
             raise commands.NoPrivateMessage()
 
-        if ctx.guild.id not in authorized_guilds:
+        if authorized_guilds is not None and ctx.guild.id not in authorized_guilds:
             raise UnsupportedGuild()
 
         return True
@@ -58,7 +60,7 @@ def is_authorized_guild():
 class AutoRoleChanger(commands.Cog):
     def __init__(self, bot: 'PNBot'):
         self.pk_id = 466378653216014359
-        self.db = bot.db
+        self.pool = bot.pool
         self.bot = bot
 
     @commands.Cog.listener()
@@ -82,6 +84,18 @@ class AutoRoleChanger(commands.Cog):
                 # await self.update_members(message=message, time_override=60 * 60)
                 await self.update_system_members(db_expiration_age=60*60, message=message)# Update from any message once an hour (The default time)
 
+
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild):
+
+        #Add the new guild to the DB.
+        await db.add_guild_setting(self.pool, guild.id, True, True, None, False, False)
+
+
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild):
+        await db.remove_guild_setting(self.pool, guild.id)
+
     # async def update_member(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None, message: Optional[discord.Message] = None):
     #     if ctx is not None:
     #         discord_member: discord.Member = ctx.author
@@ -90,7 +104,7 @@ class AutoRoleChanger(commands.Cog):
     #     if message is not None:
     #         discord_member: discord.Member = message.author
     #
-    #     pk_info = await db.get_system_id_from_linked_account(self.db, message.author.id)
+    #     pk_info = await db.get_system_id_from_linked_account(self.pool, message.author.id)
     #     if pk_info is not None:
     #         pk_id = pk_info['pk_system_id']
     #         fronters = await self.get_fronters(pk_id)
@@ -98,7 +112,7 @@ class AutoRoleChanger(commands.Cog):
     #             log.info(f"Got fronters: {fronters}")
     #             first_fronter = fronters.members[0]
     #
-    #             proto_roles = await db.get_roles_for_member_by_guild(self.db, first_fronter.hid, message.guild.id)
+    #             proto_roles = await db.get_roles_for_member_by_guild(self.pool, first_fronter.hid, message.guild.id)
     #             roles = []
     #             for proto_role in proto_roles:
     #                 roles.append(discord.Object(id=proto_role['role_id']))
@@ -111,69 +125,16 @@ class AutoRoleChanger(commands.Cog):
     #             except Exception:
     #                 pass
 
-
-    # async def update_members(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
-    #                          message: Optional[discord.Message] = None, time_override=86400):
-    #     """ This method updates the DB with every member of a system (not just the fronting members).
-    #         It is designed to be called fairly often.
-    #
-    #         It checks the last DB update time for the system,
-    #             and only hits the members & fronters API endpoints IF the records are older than time_override.
-    #         This helps to ensure that the PK API is not abused.
-    #         It then checks the fronters reported by PK against the fronters in the Database.
-    #             If they are different, it calls the Discord APIs to change name and roles.
-    #
-    #         Min resource usage:
-    #             One DB Call.
-    #         Max resource usage:
-    #             4 DB Calls.
-    #             2 PK API Calls.
-    #     """
-    #     if ctx is not None:
-    #         discord_member: discord.Member = ctx.author
-    #         message: discord.Message = ctx.message
-    #
-    #     if message is not None:
-    #         discord_member: discord.Member = message.author
-    #
-    #     members = await db.get_members_by_discord_account_if_ood(self.db, discord_member.id, time_override)
-    #     if members is not None and len(members) > 0:
-    #
-    #         system_id = members[0]['pk_sid']
-    #         await self.info(f"updating {system_id}")
-    #
-    #         updated_members = await self.get_system_members(system_id)
-    #
-    #         previous_fronters = await db.get_fronting_members_by_pk_sid(self.db, system_id)
-    #         current_fronters = await self.get_fronters(system_id)
-    #         for member in updated_members:
-    #             fronting = True if member in current_fronters.members else False
-    #             await db.update_member(self.db, system_id, member.hid, member.name, fronting=fronting)
-    #
-    #         if previous_fronters != current_fronters.members:
-    #             await self.info(f"Fronters changed!: Prev: {previous_fronters},\n Cur: {current_fronters}")
-    #
-    #             roles = []
-    #             for fronter in current_fronters.members:
-    #                 new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now. #discord_member.guild.id)
-    #                 if new_roles is not None:
-    #                     new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
-    #                     roles.extend(new_roles_ids)
-    #
-    #             new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
-    #             await self.autochange_discord_user(discord_member, roles, new_name)
-
-
     # async def get_new_roles_and_name_for_all_guilds(self, current_fronters: pk.Fronters, discord_user_id):
     #
-    #     settings = await db.get_all_user_settings_from_discord_id(self.db, discord_user_id)
+    #     settings = await db.get_all_user_settings_from_discord_id(self.pool, discord_user_id)
     #
     #     all_roles = {}
     #     new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
     #     for setting in settings:
     #         roles = []
     #         for fronter in current_fronters.members:
-    #             new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, setting.guild_id)
+    #             new_roles = await db.get_roles_for_member_by_guild(self.pool, fronter.hid, setting.guild_id)
     #             new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
     #             roles.extend(new_roles_ids)
     #
@@ -189,61 +150,7 @@ class AutoRoleChanger(commands.Cog):
     #     # await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
 
 
-    # async def update_only_fronters(self, discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
-    #                                message: Optional[discord.Message] = None, force_update=False):
-    #     """ This method updates updates the DB with only the members of the system that are fronting.
-    #         It is designed to be called ONLY when we are reasonably sure that there has been a switch.
-    #
-    #         It checks the last DB update time for the system,
-    #             and only hits the members & fronters API endpoints IF the records are older than time_override.
-    #         This helps to ensure that the PK API is not abused.
-    #         It then checks the fronters reported by PK against the fronters in the Database.
-    #             If they are different, it calls the Discord APIs to change name and roles.
-    #
-    #         Min resource usage:
-    #             One DB Call.
-    #         Max resource usage:
-    #             4 DB Calls.
-    #             2 PK API Calls.
-    #     """
-    #     if ctx is not None:
-    #         discord_member: discord.Member = ctx.author
-    #         message: discord.Message = ctx.message
-    #
-    #     if message is not None:
-    #         discord_member: discord.Member = message.author
-    #
-    #     previous_fronters = await db.get_fronting_members_by_discord_account(self.db, discord_member.id)
-    #
-    #     if previous_fronters is not None:
-    #         system_id = previous_fronters[0].sid
-    #     else:  # No one was in front. Get system_id from discord id
-    #         sys_info = await db.get_system_id_by_discord_account(self.db, discord_member.id)
-    #         if sys_info is None:
-    #             return  # No registered account exists.
-    #         system_id = sys_info['pk_system_id']
-    #
-    #     # FIXME: This incorrectly will leave the previous fronters still marked as in front.
-    #     current_fronters = await self.get_fronters(system_id)
-    #     for member in current_fronters.members:
-    #         fronting = True
-    #         await db.update_member(self.db, system_id, member.hid, member.name, fronting=fronting)
-    #
-    #     if previous_fronters != current_fronters.members or force_update:
-    #         await self.info(f"Fronters changed!: Prev: {previous_fronters}, \nCur: {current_fronters}")
-    #
-    #         roles = []
-    #         for fronter in current_fronters.members:
-    #             new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now.# discord_member.guild.id)
-    #             if new_roles is not None:
-    #                 new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
-    #                 roles.extend(new_roles_ids)
-    #
-    #         new_name = current_fronters.members[0].proxied_name if len(current_fronters.members) > 0 else None
-    #         await self.autochange_discord_user(discord_member, roles, new_name)
-
-
-    async def update_system_members(self, force_member_update: bool = False, force_discord_update: bool = False, db_expiration_age:int = 86400,
+    async def update_system_members(self, force_member_update: bool = False, force_discord_update: bool = False, db_expiration_age: int = 86400,
                                     discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
                                     message: Optional[discord.Message] = None):
 
@@ -262,7 +169,7 @@ class AutoRoleChanger(commands.Cog):
             # This is only to see if enough time has passed.
             # If it has, we might as well get the PK System ID from the returned data.
             # TODO: Find a better way of determining when to update?
-            stale_members = await db.get_members_by_discord_account_if_ood(self.db, discord_member.id, db_expiration_age)
+            stale_members = await db.get_members_by_discord_account_if_ood(self.pool, discord_member.id, db_expiration_age)
             if stale_members is None:
                 # It's not soon enough to try to do a full update. Bail for now.
                 return
@@ -271,7 +178,7 @@ class AutoRoleChanger(commands.Cog):
 
         # We need to get the stored fronters from the DB at this point.
         # This is needed to determine if we need to call the Discord API later.
-        stale_fronters = await db.get_fronting_members_by_discord_account(self.db, discord_member.id)
+        stale_fronters = await db.get_fronting_members_by_discord_account(self.pool, discord_member.id)
 
         # Try to get the system id from the fronters stored in the DB
         # Stored fronters will be none if there is no one fronting or if the system does not exist in the DB.
@@ -281,7 +188,7 @@ class AutoRoleChanger(commands.Cog):
         # If we STILL don't have a system ID, pull it from the DB directly.
         # (all the previous attempts DB calls still needed to happen, so by trying at each stage we can potentially save a DB call.)
         if system_id is None:
-            sys_info = await db.get_system_id_by_discord_account(self.db, discord_member.id)
+            sys_info = await db.get_system_id_by_discord_account(self.pool, discord_member.id)
             if sys_info is None:
                 return  # No registered account exists. Bail.
             system_id = sys_info['pk_system_id']
@@ -304,7 +211,7 @@ class AutoRoleChanger(commands.Cog):
             # TODO: When we stop updating all members, we will need to maybe set all members to not fronting THEN set the members that are frontring to fronting.
             #  Alternatively, we could have a fronting table... Then we could just delete the members from the table, and add the current ones....
             fronting = True if update_member in updated_fronters.members else False
-            await db.update_member(self.db, system_id, update_member.hid, update_member.name, fronting=fronting)
+            await db.update_member(self.pool, system_id, update_member.hid, update_member.name, fronting=fronting)
         await self.info(f"Updated members for {discord_member.name}")
 
         # TODO: The below code seems to be broken and deletes members when it should not. Fix.
@@ -320,22 +227,27 @@ class AutoRoleChanger(commands.Cog):
         #                 break
         #         if not found:
         #             await self.warning(f"DELETING member in {discord_member.name}'s system: {stale_member}")
-        #             await db.delete_member(self.db, stale_member['pk_sid'], stale_member['pk_mid'])
+        #             await db.delete_member(self.pool, stale_member['pk_sid'], stale_member['pk_mid'])
 
         # Put the stale_fronters into a better format for logging...
         log_stale_fronters = [fronter.hid for fronter in stale_fronters] if stale_fronters is not None else None
         if force_discord_update or stale_fronters is None or stale_fronters != updated_fronters.members:
 
-            await self.info(f"Fronters changed!: Prev: {log_stale_fronters}, \n\nCur: {updated_fronters}")
+            if stale_fronters is None or stale_fronters != updated_fronters.members:
+                await self.info(f"Fronters changed!: Prev: {log_stale_fronters}, \n\nCur: {updated_fronters}")
+            else:
+                await self.info(f"Update Foreced!!!")
 
-            roles = []
-            for fronter in updated_fronters.members:
-                new_roles = await db.get_roles_for_member_by_guild(self.db, fronter.hid, authorized_guilds[0])  # Force using only authorised guild for now.# discord_member.guild.id)
-                if new_roles is not None:
-                    new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
-                    roles.extend(new_roles_ids)
-
-            await self.autochange_discord_user(discord_member, system_id, roles, updated_fronters)
+            await self.autochange_discord_user_across_discord(discord_member, system_id, updated_fronters)
+            #
+            # roles = []
+            # for fronter in updated_fronters.members:  # FIXME: Chane from 1 to 0                             V
+            #     new_roles = await db.get_roles_for_member_by_guild(self.pool, fronter.hid, authorized_guilds[1])  # Force using only authorised guild for now.# discord_member.guild.id)
+            #     if new_roles is not None:
+            #         new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
+            #         roles.extend(new_roles_ids)
+            #
+            # await self.autochange_discord_user(discord_member, system_id, roles, updated_fronters)
         else:
             await self.info(f"Not updating roles: force_discord_update:{force_discord_update}, "
                             f"\nstale_fronters: {log_stale_fronters} "
@@ -354,11 +266,108 @@ class AutoRoleChanger(commands.Cog):
             raise SyntaxError("Either the discord_id &/or system id MUST be passed.")
 
         # Update the db
-        await db.update_system_by_pk_sid(self.db, updated_system.hid, updated_system.name, updated_system.tag)
+        await db.update_system_by_pk_sid(self.pool, updated_system.hid, updated_system.name, updated_system.tag)
 
         return updated_system
 
-    async def autochange_discord_user(self,  discord_member: Union[discord.Member, discord.User], pk_system_id: str, new_roles: List[Union[discord.Role, discord.Object]], updated_fronters: Optional[pk.Fronters]):
+
+    class UserRoles(NamedTuple):
+        guild_id: int
+        roles: List[discord.Object]
+
+
+    async def get_new_roles(self, fronters: pk.Fronters, guild_id: int) -> Optional[UserRoles]:
+
+        if fronters is None:
+            return None
+
+        roles = []
+        for fronter in fronters.members:
+            new_roles = await db.get_roles_for_member_by_guild(self.pool, fronter.hid, guild_id)
+            if new_roles is not None:
+                new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
+                roles.extend(new_roles_ids)
+
+        user_roles = self.UserRoles(guild_id=guild_id, roles=roles)
+        return user_roles
+
+    # async def get_new_roles_for_all_guilds(self, fronters: pk.Fronters) -> Optional[List[UserRoles]]:
+    #
+    #     if fronters is None:
+    #         return None
+    #
+    #     roles = []
+    #     for fronter in fronters.members:
+    #         roles_for_all_guilds = await db.get_roles_for_member(self.pool, fronter.hid)
+    #
+    #         for role
+
+
+    async def autochange_discord_user_across_discord(self, discord_member: Union[discord.Member, discord.User],
+                                                     pk_system_id: str, updated_fronters: Optional[pk.Fronters]):
+
+        updated_system = None
+        new_name = None
+        discord_member_id = discord_member.id
+        triggered_guild: discord.Guild = discord_member.guild  # This is the guild the trigger action took place in
+        all_user_settings = await db.get_all_user_settings_from_discord_id(self.pool, discord_member.id)
+
+        if all_user_settings is not None:
+
+            for user_settings_in_guild in all_user_settings:
+                current_guild: discord.Guild = self.bot.get_guild(user_settings_in_guild.guild_id)
+                if current_guild is None:
+                    continue  # Couldn't get guild... Skip
+                current_discord_user = current_guild.get_member(discord_member_id)
+                if current_discord_user is None:
+                    continue  # Couldn't get member... Skip
+
+                if user_settings_in_guild.role_change:
+                    new_roles = await self.get_new_roles(updated_fronters, user_settings_in_guild.guild_id)
+
+                    await self.info(f"Setting {current_discord_user.display_name}'s {len(new_roles)} role(s)")
+
+                    guild_allowed_auto_roles = await db.get_allowable_roles(self.pool, user_settings_in_guild.guild_id)  # discord_member.guild.id)
+
+                    # TODO: I'm fairly sure this is the case already, but make sure that this removes disallowed roles from 'new_roles'
+                    # Get the auto roles to set and get the roles we must keep
+                    allowed_new_roles = guild_allowed_auto_roles.allowed_intersection(new_roles.roles) if new_roles else []
+                    old_roles_to_keep = guild_allowed_auto_roles.disallowed_intersection(current_discord_user.roles)
+
+                    # Use a set to ensure there are no duplicates.
+                    roles_to_set = set(allowed_new_roles + old_roles_to_keep)
+                    await self.info(f"Applying the following roles: {roles_to_set}")
+
+                    try:
+                        await current_discord_user.edit(roles=set(roles_to_set))
+                    except discord.errors.Forbidden:
+                        await self.info(f"Could not set roles: {roles_to_set} on {current_discord_user.display_name}")
+
+                if user_settings_in_guild.name_change and len(updated_fronters.members) > 0:  # TODO: Add option to set system name as nickname when no one is fronting.
+
+                    # if user_settings.system_tag_override is None:
+                    if updated_system is None:
+                        updated_system = await self.update_system(system_id=pk_system_id)
+                        system_tag = updated_system.tag
+
+                        max_nickname_length = 32
+                        if system_tag:
+                            system_tag_length = len(system_tag) + 1  # + 1 due to Space between tag and name.
+                            shortened_member_name = updated_fronters.members[0].proxied_name[
+                                                    :max_nickname_length - system_tag_length]
+                            new_name = f"{shortened_member_name} {system_tag}" if system_tag else updated_fronters.members[0].proxied_name[:max_nickname_length]
+                        else:
+                            new_name = updated_fronters.members[0].proxied_name[:max_nickname_length]
+
+                    await self.info(f"Changing {discord_member.display_name} name to {new_name}'s name")
+                    try:
+                        await current_discord_user.edit(nick=new_name)
+                    except discord.errors.Forbidden:
+                        await self.info(f"Forbidden! Could not change {discord_member.display_name}'s name")
+
+
+
+    async def autochange_discord_user(self, discord_member: Union[discord.Member, discord.User], pk_system_id: str, new_roles: List[Union[discord.Role, discord.Object]], updated_fronters: Optional[pk.Fronters]):
         """Applies the new roles and name to the selected discord user"""
 
         # guild: discord.Guild = discord_member.guild
@@ -377,41 +386,50 @@ class AutoRoleChanger(commands.Cog):
                 await self.info(f"Can not set roles/name! Unable to get discord_member {member_id} in autochange_discord_user")
                 return
 
-        user_settings = await db.get_user_settings_from_discord_id(self.db, discord_member.id, guild.id)  # discord_member.guild.id)
+        user_settings = await db.get_user_settings_from_discord_id(self.pool, discord_member.id, guild.id)
 
-        if user_settings.role_change:
-            await self.info(f"Setting {discord_member.display_name}'s {len(new_roles)} role(s)")
+        if user_settings is not None:
 
-            guild_allowed_auto_roles = await db.get_allowable_roles(self.db, guild.id)  # discord_member.guild.id)
+            if user_settings.role_change:
+                await self.info(f"Setting {discord_member.display_name}'s {len(new_roles)} role(s)")
 
-            # Get the auto roles to set and get the roles we must keep
-            allowed_new_roles = guild_allowed_auto_roles.allowed_intersection(new_roles)
-            old_roles_to_keep = guild_allowed_auto_roles.disallowed_intersection(discord_member.roles)
+                guild_allowed_auto_roles = await db.get_allowable_roles(self.pool, guild.id)  # discord_member.guild.id)
 
-            # Use a set to ensure there are no duplicates.
-            roles_to_set = set(allowed_new_roles + old_roles_to_keep)
-            await self.info(f"Applying the following roles: {roles_to_set}")
+                # TODO: I'm fairly sure this is the case already, but make sure that this removes disallowed roles from 'new_roles'
+                # Get the auto roles to set and get the roles we must keep
+                allowed_new_roles = guild_allowed_auto_roles.allowed_intersection(new_roles)
+                old_roles_to_keep = guild_allowed_auto_roles.disallowed_intersection(discord_member.roles)
 
-            try:
-                await discord_member.edit(roles=set(roles_to_set))
-            except discord.errors.Forbidden:
-                await self.info(f"Could not set roles: {roles_to_set} on {discord_member.display_name}")
+                # Use a set to ensure there are no duplicates.
+                roles_to_set = set(allowed_new_roles + old_roles_to_keep)
+                await self.info(f"Applying the following roles: {roles_to_set}")
 
-        if user_settings.name_change and len(updated_fronters.members) > 0:  # TODO: Add option to set system name as nickname when no one is fronting.
+                try:
+                    await discord_member.edit(roles=set(roles_to_set))
+                except discord.errors.Forbidden:
+                    await self.info(f"Could not set roles: {roles_to_set} on {discord_member.display_name}")
 
-            if user_settings.system_tag_override is None:
+            if user_settings.name_change and len(updated_fronters.members) > 0:  # TODO: Add option to set system name as nickname when no one is fronting.
+
+                # if user_settings.system_tag_override is None:
                 updated_system = await self.update_system(system_id=pk_system_id)
                 system_tag = updated_system.tag
-            else:
-                system_tag = user_settings.system_tag_override
+                # else:
+                #     system_tag = user_settings.system_tag_override
 
-            new_name = f"{updated_fronters.members[0].proxied_name} {system_tag}" if system_tag else updated_fronters.members[0].proxied_name
+                max_nickname_length = 32
+                if system_tag:
+                    system_tag_length = len(system_tag) + 1  # + 1 due to Space between tag and name.
+                    shortened_member_name = updated_fronters.members[0].proxied_name[:max_nickname_length-system_tag_length]
+                    new_name = f"{shortened_member_name} {system_tag}" if system_tag else updated_fronters.members[0].proxied_name[:max_nickname_length]
+                else:
+                    new_name = updated_fronters.members[0].proxied_name[:max_nickname_length]
 
-            await self.info(f"Changing {discord_member.display_name} name to {new_name}'s name")
-            try:
-                await discord_member.edit(nick=new_name)
-            except discord.errors.Forbidden:
-                await self.info(f"Forbidden! Could not change {discord_member.display_name}'s name")
+                await self.info(f"Changing {discord_member.display_name} name to {new_name}'s name")
+                try:
+                    await discord_member.edit(nick=new_name)
+                except discord.errors.Forbidden:
+                    await self.info(f"Forbidden! Could not change {discord_member.display_name}'s name")
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
@@ -508,25 +526,98 @@ class AutoRoleChanger(commands.Cog):
         await ctx.send(embed=embed)
 
 
+    # ----- Permission Debug Commands ----- #
+    @commands.guild_only()
+    @commands.command(name="permcheck", aliases=["permissions", "perm"])
+    async def permcheck(self, ctx: commands.Context):
+        zws = "\N{ZERO WIDTH SPACE}"
+        dot = "\N{Middle Dot}"
+
+        guild: discord.Guild = ctx.guild
+        guild_roles: List[discord.Role] = guild.roles
+
+        me: Union[discord.User, discord.Member] = guild.me
+        bots_highest_role: discord.Role = me.roles[-1]
+
+        # Get all the roles that we are can use by permissions, the roles we cant use due to premissions, the roles we are configured to allow people to set, and the roles of those we cant set.
+        roles_settable_by_bot = guild_roles[1:bots_highest_role.position]  # Remove @Everyone and all roles higher or equal to the highest role the bot has.
+        roles_not_settable_by_bot = guild_roles[bots_highest_role.position:]
+
+        allowable_roles = await db.get_allowable_roles(self.pool, guild.id)
+        assignable_roles = allowable_roles.allowed_intersection(roles_settable_by_bot)
+
+        unassignable_roles = allowable_roles.allowed_intersection(roles_not_settable_by_bot)
+
+        embed = discord.Embed(title="ARC Permissions Diagnostics")
+
+        if len(unassignable_roles):  # len(allowable_roles.role_ids) - len(assignable_roles)) > 0:
+
+            # description.extend([
+            #                f"ARC only has permissions to assign **{len(assignable_roles)} out of {len(allowable_roles.role_ids)}** roles that it is configured to allow users to use.\n{zws}\n"
+            #                f"Due to how Discord permissions work, ARC can *only* assign roles *lower* than the highest role that ARC possesses (<@&{bots_highest_role.id}>)\n",
+            #                f"To enable ARC to give roles higher than that, either the <@&{bots_highest_role.id}> role needs to be dragged above all the roles you wish it to give, or it must be assigned a higher role.\n"
+            # ])
+            # all_assignable_roles_msg = ", ".join([f"<@&{role.id}>" for role in roles_settable_by_bot])
+            # embed.add_field(name=f"All Roles in {guild.name} ARC currently has the permissions to give:", value=all_assignable_roles_msg)
+
+            # assignable_roles_msg = ", ".join([f"<@&{role.id}>" for role in assignable_roles])
+
+            embed.add_field(name="Potential Problems With Automatic Role Changes:", value=f"ARC only has permissions to assign **{len(assignable_roles)} out of {len(allowable_roles.role_ids)}** roles that it is configured to allow users to use.\n{zws}\n"
+            f"Due to how Discord permissions work, ARC can *only* assign roles *lower* than the highest role that ARC possesses (<@&{bots_highest_role.id}>)\n\n"
+            f"To enable ARC to give roles higher than that, either the <@&{bots_highest_role.id}> role needs to be dragged above all the roles you wish it to give, or it must be assigned a higher role.\n", inline=False)
+
+            unassignable_roles_msg = ", ".join([f"<@&{role.id}>" for role in unassignable_roles])
+            if len(unassignable_roles_msg) > 1000:
+                unassignable_roles_msg = f"Too many roles to list. {len(unassignable_roles_msg)} Roles."
+
+            embed.add_field(name=f"All roles that ARC is configured to allow using, but is unable to assign due to discord permissions:",
+                            value=unassignable_roles_msg, inline=False)
+
+        if len(roles_not_settable_by_bot) > 0:
+            # Since there are higher roles than use, there is a chance there are memberes of this guild that we can not assign roles too.
+            # Check into this.
+            guild_members: List[Union[discord.Member, discord.User]] = guild.members
+            higher_members = [member for member in guild_members if member.top_role.position >= me.top_role.position and not member.bot]
+            if len(higher_members) > 0:
+
+                embed.add_field(name="Potential Problems With Automatic Name Changes:",
+                                value="ARC is unable to automatically change some users nicknames.\n"
+                                      "This is because they have a role higher in the hierarchy than ARC does.\n\n"
+                                      "To fix this, either raise ARCs role to be higher than theirs, or give ARC a higher role.\n\n"
+                                      f"Please note, that ARC can *never* change the name of the guild owner.\n"
+                                      "This is unfortunately a limitation with Discords permission system", inline=False)
+
+                name_msg = ", ".join([f"<@{member.id}>" for member in higher_members])
+                if len(name_msg) > 1000:
+                    name_msg = f"Too many users to list. {len(name_msg)} Users."
+
+                embed.add_field(name="ARC is unable to automaticly change the following users name:",
+                                value=name_msg, inline=False)
+
+        if len(embed.fields) == 0:
+            embed.description = f"**No Problems Found!**\n{zws}\nPlease note, that ARC can *never* change the name of the guild owner.\n" \
+                f"This is unfortunately a limitation with Discords permission system"
+        else:
+            embed.description = f"**Potential Problems Found!**\n{zws}"
+
+        await ctx.send(embed=embed)
+
+
     @commands.guild_only()
     @commands.command(name="update", aliases=["sw"], brief="Update who is fronting.",
                       description="Cause the bot to check with PK to see who is fronting.\n"
                                   "If the fronter has changed, roles and nicknames will be updated accordingly.")
     async def update_command(self, ctx: commands.Context):
-
-        # await self.update_members(ctx=ctx, time_override=1)
-        # await self.update_only_fronters(ctx=ctx, force_update=True)  # TODO: Update update_system so both do not ahve to be called.
+        await self.warning(f"{ctx.author.name} used update")
+        msg = await ctx.send("Updating...")
         await self.update_system_members(force_discord_update=True, ctx=ctx)
-        if ctx.guild.id in authorized_guilds:
-            user_settings = await db.get_user_settings_from_discord_id(self.db, ctx.author.id, ctx.guild.id)
-            if not user_settings.role_change and not user_settings.name_change:
-                await ctx.send(f"You do not have roles or name changes enabled! You can enable them with the **{self.bot.command_prefix}settings** command.")
-            elif user_settings.role_change and user_settings.name_change:
-                await ctx.send("System updated! If your roles and name did not update, please try again in a minute.")
-            elif user_settings.role_change:
-                await ctx.send("System updated! If your roles did not update, please try again in a minute.")
-            elif user_settings.name_change:
-                await ctx.send("System updated! If your name did not update, please try again in a minute.")
+        if authorized_guilds is None or ctx.guild.id in authorized_guilds:
+            user_settings = await db.get_user_settings_from_discord_id(self.pool, ctx.author.id, ctx.guild.id)
+            if not user_settings or not user_settings.role_change and not user_settings.name_change:
+                await msg.edit(content=f"You do not have roles or name changes enabled in this guild! You can enable them with the **{self.bot.command_prefix}settings** command.\n"
+                               f"If your name and/or roles did not update in other guilds, please try again in a minute.")
+            else:
+                await msg.edit(content="System updated! If your roles and/or name did not update, please try again in a minute.")
 
 
     # @is_authorized_guild()
@@ -537,9 +628,9 @@ class AutoRoleChanger(commands.Cog):
                                       body="Please enter the name or ID of the System Member below:")
         await member_input.run(self.bot, ctx)
         if member_input is not None:
-            member = await db.get_member_fuzzy(self.db, ctx.author.id, member_input.response.content)
+            member = await db.get_member_fuzzy(self.pool, ctx.author.id, member_input.response.content)
             if member is not None:
-                roles = await db.get_roles_for_member_by_guild(self.db, member['pk_mid'], ctx.guild.id)
+                roles = await db.get_roles_for_member_by_guild(self.pool, member['pk_mid'], ctx.guild.id)
                 if roles is not None:
                     embed = discord.Embed()
                     embed.set_author(name=f"{member['member_name']}'s roles:")
@@ -556,17 +647,16 @@ class AutoRoleChanger(commands.Cog):
     @commands.command(aliases=["list_all", "list_all_roles"], brief="See what roles are assigned to all of your system members.")
     async def list_all_member_roles(self, ctx: commands.Context):
 
-        members = await db.get_members_by_discord_account(self.db, ctx.author.id)
+        members = await db.get_members_by_discord_account(self.pool, ctx.author.id)
 
         if members is None or len(members) == 0:
             await ctx.send(
                 f"You do not have a Plural Kit account registered. Use `{self.bot.command_prefix}register` to register your system.")
             return
 
-        # largest_embed = 0
         member_roles = []
         for member in members:
-            roles = await db.get_roles_for_member_by_guild(self.db, member['pk_mid'], ctx.guild.id)
+            roles = await db.get_roles_for_member_by_guild(self.pool, member['pk_mid'], ctx.guild.id)
             if roles is not None:
                 role_msgs = []
                 role_strs = []
@@ -593,7 +683,7 @@ class AutoRoleChanger(commands.Cog):
                     member_roles.append((f"{member['member_name']} ({role_fields}/{len(role_msgs)})", msg))
                     role_fields += 1
             else:
-                await self.warning(f"role_msgs: {role_msgs}, Member: {member}, roles: {roles}")
+                # await self.warning(f"role_msgs: {role_msgs}, Member: {member}, roles: {roles}")
                 member_roles.append((f"{member['member_name']}", role_msgs[0]))
 
         page = FieldPages(ctx, entries=member_roles, per_page=6)
@@ -611,7 +701,7 @@ class AutoRoleChanger(commands.Cog):
 
         def __init__(self, bot, ctx):
             self.bot = bot
-            self.db = bot.db
+            self.pool = bot.pool
             self.ctx = ctx
             self.member = None
             self.role = None
@@ -620,7 +710,7 @@ class AutoRoleChanger(commands.Cog):
 
         async def run(self):
 
-            self.allowable_roles = await db.get_allowable_roles(self.db, self.ctx.guild.id)
+            self.allowable_roles = await db.get_allowable_roles(self.pool, self.ctx.guild.id)
             if self.allowable_roles is None:
                 await self.ctx.send("There are no Auto changeable roles set up for this guild!")
                 return
@@ -656,7 +746,7 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
 
-            members = await db.get_members_by_discord_account(self.db, ctx.author.id)  # ctx.author.id)
+            members = await db.get_members_by_discord_account(self.pool, ctx.author.id)  # ctx.author.id)
             if members is None or len(members) == 0:
 
                 await ctx.send(
@@ -665,7 +755,7 @@ class AutoRoleChanger(commands.Cog):
 
             for role in roles.good_roles:
                 for member in members:
-                    await db.remove_role_from_member(self.db, ctx.guild.id, member['pk_mid'], role.id)
+                    await db.remove_role_from_member(self.pool, ctx.guild.id, member['pk_mid'], role.id)
 
             # Construct embed to tell the user of the successes and failures.
             embed = discord.Embed()
@@ -710,7 +800,7 @@ class AutoRoleChanger(commands.Cog):
         async def select_member_for_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                          response: discord.Message):
 
-            member = await db.get_member_fuzzy(self.db, ctx.author.id, response.content)
+            member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
             if member is None:
                 await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID.")
             else:
@@ -736,7 +826,7 @@ class AutoRoleChanger(commands.Cog):
                 return
 
             for role in roles.good_roles:
-                await db.remove_role_from_member(self.db, ctx.guild.id, self.member['pk_mid'], role.id)
+                await db.remove_role_from_member(self.pool, ctx.guild.id, self.member['pk_mid'], role.id)
 
             # Construct embed to tell the user of the successes and failures.
             embed = discord.Embed(title=f"Removed {len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles) + len(roles.disallowed_roles)} roles from {self.member['member_name']}:")
@@ -789,7 +879,7 @@ class AutoRoleChanger(commands.Cog):
 
         def __init__(self, bot, ctx):
             self.bot = bot
-            self.db = bot.db
+            self.pool = bot.pool
             self.ctx = ctx
             self.member = None
             self.role = None
@@ -797,7 +887,7 @@ class AutoRoleChanger(commands.Cog):
             self.allowable_roles: Optional[db.AllowableRoles] = None
 
         async def run(self):
-            self.allowable_roles = await db.get_allowable_roles(self.db, self.ctx.guild.id)
+            self.allowable_roles = await db.get_allowable_roles(self.pool, self.ctx.guild.id)
             if self.allowable_roles is None:
                 await self.ctx.send("There are no Auto changeable roles set up for this guild!")
                 return
@@ -870,7 +960,7 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
 
-            members = await db.get_members_by_discord_account(self.db, ctx.author.id)  # ctx.author.id)
+            members = await db.get_members_by_discord_account(self.pool, ctx.author.id)  # ctx.author.id)
             if members is None or len(members) == 0:
                 await ctx.send(
                     f"You do not have a Plural Kit account registered. Use `{self.bot.command_prefix}register` to register your system.")
@@ -878,7 +968,7 @@ class AutoRoleChanger(commands.Cog):
 
             for role in roles.good_roles:
                 for member in members:
-                    await db.add_role_to_member(self.db, ctx.guild.id, member['pk_mid'], member['pk_sid'], role.id)
+                    await db.add_role_to_member(self.pool, ctx.guild.id, member['pk_mid'], member['pk_sid'], role.id)
 
                 # await ctx.send(f"Added **{role.name}** to all registered system members!")
 
@@ -921,7 +1011,7 @@ class AutoRoleChanger(commands.Cog):
         async def select_member_for_current_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                                   response: discord.Message):
 
-            member = await db.get_member_fuzzy(self.db, ctx.author.id, response.content)
+            member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
             if member is None:
                 await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID.")
             else:
@@ -944,7 +1034,7 @@ class AutoRoleChanger(commands.Cog):
         # --- Add Roles to member prompts --- #
         async def select_member_for_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context, response: discord.Message):
 
-            member = await db.get_member_fuzzy(self.db, ctx.author.id, response.content)
+            member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
             if member is None:
                 await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID")
             else:
@@ -975,7 +1065,7 @@ class AutoRoleChanger(commands.Cog):
                 return
 
             for role in roles.good_roles:
-                await db.add_role_to_member(self.db, ctx.guild.id, self.member['pk_mid'], self.member['pk_sid'], role.id)
+                await db.add_role_to_member(self.pool, ctx.guild.id, self.member['pk_mid'], self.member['pk_sid'], role.id)
 
             # Construct embed to tell the user of the successes and failures.
             embed = discord.Embed(
@@ -1013,18 +1103,17 @@ class AutoRoleChanger(commands.Cog):
 
     @commands.is_owner()
     @commands.command(hidden=True)
-    async def debug_settings(self, ctx: commands.Context, member_id: int):
+    async def debug_settings(self, ctx: commands.Context, member_id: int):#, guild_id: Optional[int]):
 
-        user_settings = await db.get_user_settings_from_discord_id(self.db, member_id, authorized_guilds[0])
+        user_settings = await db.get_user_settings_from_discord_id(self.pool, member_id, ctx.guild.id)# authorized_guilds[0])
         if not user_settings:
             await ctx.send(f"{member_id} has no settings.")
             return
 
         auto_name = "On" if user_settings.name_change else "Off"
         auto_role = "On" if user_settings.role_change else "Off"
-        system_tag_override = user_settings.system_tag_override or "Not Set"
 
-        msg = f"Auto name: {auto_name}, Auto Roles: {auto_role}, tag override: {system_tag_override}"
+        msg = f"Auto name: {auto_name}, Auto Roles: {auto_role}"
         await ctx.send(msg)
 
     @is_authorized_guild()
@@ -1045,21 +1134,29 @@ class AutoRoleChanger(commands.Cog):
 
         def __init__(self, bot, ctx):
             self.bot = bot
-            self.db = bot.db
+            self.pool = bot.pool
             self.ctx = ctx
 
             self.current_user_settings: Optional[db.UserSettings] = None
 
         async def run(self):
-            self.current_user_settings = await db.get_user_settings_from_discord_id(self.db, self.ctx.author.id, self.ctx.guild.id)
-            if self.current_user_settings is None:
+            check_if_registed = await db.get_system_id_by_discord_account(self.pool, self.ctx.author.id)
+            if check_if_registed is None:
                 await self.ctx.send("You do not seem to be registered with this bot. "
                                     f"Please use reg_sys to `{self.bot.command_prefix}register` a new account or update your existing account")
                 return
 
+            self.current_user_settings = await db.get_user_settings_from_discord_id(self.pool, self.ctx.author.id, self.ctx.guild.id)
+            if self.current_user_settings is None:
+                # Load default user settings in case none exist, then create a UserSettings obj manually
+                await db.update_user_setting(self.pool, check_if_registed['pk_sid'], self.ctx.guild.id, False, False)
+                self.current_user_settings = db.UserSettings({'pk_sid': check_if_registed['pk_sid'],
+                                                              'guild_id': self.ctx.guild.id,
+                                                              'name_change': False,
+                                                              'role_change': False})
+
             auto_name = "On" if self.current_user_settings.name_change else "Off"
             auto_role = "On" if self.current_user_settings.role_change else "Off"
-            system_tag_override = self.current_user_settings.system_tag_override or "Not Set"
 
             name_change = reactMenu.Page("bool", name="Toggle Auto Name Change",
                                          body=f"Toggles the automatic name change functionality. Currently **{auto_name}**",
@@ -1091,7 +1188,7 @@ class AutoRoleChanger(commands.Cog):
                 new_name_setting = False if self.current_user_settings.name_change else True
                 new_name_setting_text = "Off" if self.current_user_settings.name_change else "On"
 
-                await db.update_user_setting(self.db, self.current_user_settings.pk_sid, ctx.guild.id, name_change=new_name_setting,
+                await db.update_user_setting(self.pool, self.current_user_settings.pk_sid, ctx.guild.id, name_change=new_name_setting,
                                              role_change=self.current_user_settings.role_change)
                 await self.ctx.send(f"Automatic name changes are now **{new_name_setting_text}**")
             else:
@@ -1104,7 +1201,7 @@ class AutoRoleChanger(commands.Cog):
                 new_role_setting = False if self.current_user_settings.role_change else True
                 new_role_setting_text = "Off" if self.current_user_settings.role_change else "On"
 
-                await db.update_user_setting(self.db, self.current_user_settings.pk_sid, ctx.guild.id, name_change=self.current_user_settings.name_change,
+                await db.update_user_setting(self.pool, self.current_user_settings.pk_sid, ctx.guild.id, name_change=self.current_user_settings.name_change,
                                              role_change=new_role_setting)
                 await self.ctx.send(f"Automatic role changes are now **{new_role_setting_text}**")
             else:
@@ -1125,13 +1222,13 @@ class AutoRoleChanger(commands.Cog):
 
         def __init__(self, bot, ctx):
             self.bot = bot
-            self.db = bot.db
+            self.pool = bot.pool
             self.ctx = ctx
 
             self.allowable_roles: Optional[db.AllowableRoles] = None
 
         async def run(self):
-            self.allowable_roles = await db.get_allowable_roles(self.db, self.ctx.guild.id)
+            self.allowable_roles = await db.get_allowable_roles(self.pool, self.ctx.guild.id)
 
             list_allowable_roles = reactMenu.Page(page_type="custom", name="List usable roles.",
                                                   body="Displays a list of all the roles users are allowed to use",
@@ -1174,43 +1271,13 @@ class AutoRoleChanger(commands.Cog):
             """Add more roles to the list of usable roles"""
 
             role_text = response.content
-
-            # csv_regex = "(.+?)(?:,|$)"
-            # if len(role_text) == 0:
-            #     await ctx.send("ERROR!!! Could not parse roles!")
-            #     return
-            #
-            # # Make sure that the string ends in a comma for proper regex detection
-            # if role_text[-1] != ",":
-            #     role_text += ","
-            # log.info(role_text)
-            # raw_roles = re.findall(csv_regex, role_text)
-            # if len(raw_roles) == 0:
-            #     await ctx.send("ERROR!!! Could not parse roles!")
-            #     return
-            # log.info(raw_roles)
-            # good_roles = []
-            # bad_roles = []
-            # for raw_role in raw_roles:
-            #     raw_role: str
-            #     try:
-            #         # add identifiable roles to the good list
-            #         # Todo: Try to match up Snowflake like raw roles to the roles in self.allowable_roles and bypass the RoleConverter on success.
-            #         role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
-            #         good_roles.append(role)
-            #     except commands.errors.BadArgument:
-            #         # Role could not be found. Add to bad list.
-            #         bad_roles.append(raw_role)
-
-            # Add all the good roles to the DB
-
             roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text)
             if roles is None:
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
 
             for role in roles.good_roles:
-                await db.add_allowable_role(self.db, ctx.guild.id, role.id)
+                await db.add_allowable_role(self.pool, ctx.guild.id, role.id)
 
             # Construct embed to tell the user of the successes and failures.
             embed = discord.Embed(title=f"{len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles)} roles added to the allowed list:")
@@ -1230,37 +1297,10 @@ class AutoRoleChanger(commands.Cog):
             """Remove roles from the list of usable roles"""
 
             role_text = response.content
-            #
-            # csv_regex = "(.+?)(?:,|$)"
-            # if len(role_text) == 0:
-            #     await ctx.send("ERROR!!! Could not parse roles!")
-            #     return
-            #
-            # # Make sure that the string ends in a comma for proper regex detection
-            # if role_text[-1] != ",":
-            #     role_text += ","
-            #
-            # raw_roles = re.findall(csv_regex, role_text)
-            # if len(raw_roles) == 0:
-            #     await ctx.send("ERROR!!! Could not parse roles!")
-            #     return
-            #
-            # good_roles = []
-            # bad_roles = []
-            # for raw_role in raw_roles:
-            #     try:
-            #         # add identifiable roles to the good list
-            #         # Todo: Try to match up Snowflake like raw roles to the roles in self.allowable_roles and bypass the RoleConverter on success.
-            #         role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
-            #         good_roles.append(role)
-            #     except commands.errors.BadArgument:
-            #         # Role could not be found. Add to bad list.
-            #         bad_roles.append(raw_role)
-
             # Remove all the good roles from the DB
             roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text)
             for role in roles.good_roles:
-                await db.remove_allowable_role(self.db, ctx.guild.id, role.id)
+                await db.remove_allowable_role(self.pool, ctx.guild.id, role.id)
 
             # Construct embed to tell the user of the successes and failures.
             embed = discord.Embed(
@@ -1322,19 +1362,19 @@ class AutoRoleChanger(commands.Cog):
         current_fronters = await self.get_fronters(system_id)
         await self.info(f"{current_fronters}")
         await self.info(f"adding new system to DB: {system.name} ({system.hid})")
-        await db.add_new_system(self.db, system_id, system.name, None, system.tag, None)
+        await db.add_new_system(self.pool, system_id, system.name, None, system.tag, None)
 
         # Add default user settings
-        await db.update_user_setting(self.db, system_id, ctx.guild.id, name_change=False, role_change=False)
+        await db.update_user_setting(self.pool, system_id, ctx.guild.id, name_change=False, role_change=False)
 
         await self.info(f"adding linked discord accounts DB: {system.name}({system.hid})")
 
         for account in pk_info['discord_accounts']:
-            await db.add_linked_discord_account(self.db, system_id, int(account))
+            await db.add_linked_discord_account(self.pool, system_id, int(account))
 
         for member in members:
             fronting = True if member in current_fronters.members else False
-            await db.add_new_member(self.db, system_id, member.hid, member.name, fronting=fronting)
+            await db.add_new_member(self.pool, system_id, member.hid, member.name, fronting=fronting)
         # await self.info(f"adding the following members to the db: {members}")
         await ctx.invoke(self.getting_started)
         await ctx.send(f"Your system and {len(members)} members of your system have been registered successfully!\n"
@@ -1441,13 +1481,13 @@ class AutoRoleChanger(commands.Cog):
         """Info Logger"""
         func = inspect.currentframe().f_back.f_code
         log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
-        await self.bot.dLog.info(msg, header=f"[{__name__}]")
+        # await self.bot.dLog.info(msg, header=f"[{__name__}]")
 
     async def warning(self, msg):
         # log.warning(msg)
         func = inspect.currentframe().f_back.f_code
         log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
-        await self.bot.dLog.warning(msg, header=f"[{__name__}]")
+        # await self.bot.dLog.warning(msg, header=f"[{__name__}]")
 
 
 def setup(bot):

@@ -9,6 +9,9 @@ from typing import Optional, Dict
 
 import discord
 from discord.ext import commands
+
+import asyncpg
+
 from cogs.utils.dLogger import dLogger
 import embeds
 from botExceptions import UnsupportedGuild
@@ -27,6 +30,7 @@ class PNBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.db: Optional[str] = None
+        self.pool: Optional[asyncpg.pool.Pool] = None
         self.error_log_channel_id: Optional[int] = None
         self.warning_log_channel_id: Optional[int] = None
         self.info_log_channel_id: Optional[int] = None

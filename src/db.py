@@ -613,12 +613,77 @@ async def remove_user_settings(db: str, pk_sid: str, guild_id: int):
 
 
 
+# --- Postgres Migration Functions --- #
 
-# --- Updates --- #
+@db_deco
+async def get_all_systems_from_sqlite(db: str) -> List:
+    async with aiosqlite.connect(db) as conn:
+
+        sys_map = ['pk_sid', 'system_name', 'pk_token', 'current_fronter', 'last_update', 'pk_system_tag']
+        cursor = await conn.execute("SELECT * from systems")
+        raw_rows = await cursor.fetchall()
+
+        rows = [dict(zip(sys_map, row)) for row in raw_rows]
+        return rows
 
 
-# --- Selects --- #
+@db_deco
+async def get_all_members_from_sqlite(db: str) -> List:
+    async with aiosqlite.connect(db) as conn:
 
+        dict_map = ['pk_mid', 'pk_sid', 'member_name', 'fronting', 'last_update']
+        cursor = await conn.execute("SELECT * from members")
+        raw_rows = await cursor.fetchall()
+
+        rows = [dict(zip(dict_map, row)) for row in raw_rows]
+        return rows
+
+
+@db_deco
+async def get_all_accounts_from_sqlite(db: str) -> List:
+    async with aiosqlite.connect(db) as conn:
+
+        dict_map = ['dis_uid', 'pk_sid']
+        cursor = await conn.execute("SELECT * from accounts")
+        raw_rows = await cursor.fetchall()
+
+        rows = [dict(zip(dict_map, row)) for row in raw_rows]
+        return rows
+
+@db_deco
+async def get_all_roles_from_sqlite(db: str) -> List:
+    async with aiosqlite.connect(db) as conn:
+
+        dict_map = ['pk_mid', 'pk_sid', 'role_id', 'guild_id']
+        cursor = await conn.execute("SELECT * from roles")
+        raw_rows = await cursor.fetchall()
+
+        rows = [dict(zip(dict_map, row)) for row in raw_rows]
+        return rows
+
+
+@db_deco
+async def get_all_allowable_roles_from_sqlite(db: str) -> List:
+    async with aiosqlite.connect(db) as conn:
+
+        dict_map = ['role_id', 'guild_id']
+        cursor = await conn.execute("SELECT * from allowable_roles")
+        raw_rows = await cursor.fetchall()
+
+        rows = [dict(zip(dict_map, row)) for row in raw_rows]
+        return rows
+
+
+@db_deco
+async def get_all_user_settings_from_sqlite(db: str) -> List:
+    async with aiosqlite.connect(db) as conn:
+
+        dict_map = ['pk_sid', 'guild_id', 'name_change', 'role_change']
+        cursor = await conn.execute("SELECT * from user_settings")
+        raw_rows = await cursor.fetchall()
+
+        rows = [dict(zip(dict_map, row)) for row in raw_rows]
+        return rows
 
 # ---------- Table Creation ---------- #
 
@@ -669,6 +734,7 @@ async def migrate_to_latest(db: str):
             #     # Set DB to next version
                 await conn.execute(f"PRAGMA user_version = 3")
                 log.warning(f"Tables have been migrated to version 3")
+
 
 
 @db_deco

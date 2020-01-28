@@ -39,7 +39,7 @@ class Page:
     """
     LOG = logging.getLogger("PNBot.Page")
 
-    def __init__(self, page_type, name: Optional[str] = None, body: Optional[str] = None,
+    def __init__(self, page_type: str, name: Optional[str] = None, body: Optional[str] = None,
                  callback: Callable = do_nothing, additional: str = None, previous_page: Optional = None, timeout: int = 120.0):
         # self.header_name = header_name
         # self.header_body = header_body
@@ -48,7 +48,7 @@ class Page:
         self.additional = additional
         self.timeout = timeout
 
-        self.page_type = page_type
+        self.page_type = page_type.lower()
         self.callback = callback
         self.response = None
         self.previous = previous_page
@@ -89,8 +89,12 @@ class Page:
         page_message = await channel.send(page_msg)
         self.page_message = page_message
 
-        await page_message.add_reaction("✅")
-        await page_message.add_reaction("❌")
+        try:
+            await page_message.add_reaction("✅")
+            await page_message.add_reaction("❌")
+        except discord.Forbidden as e:
+            await ctx.send(f"CRITICAL ERROR!!! \n{ctx.guild.me.name} does not have the `Add Reactions` permissions!. Please have an Admin fix this issue and try again.")
+            raise e
 
 
         def react_check(_reaction: discord.Reaction, _user):
