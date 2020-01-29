@@ -72,6 +72,7 @@ def allowable_roles_embed(allowable_roles: Optional['AllowableRoles']) -> discor
         roles_msg = "No roles are configured!"
 
     embed.description = roles_msg
+    return embed
 
 
 def added_roles_to_all_members_embed(roles: 'ParsedRoles') -> discord.Embed:
