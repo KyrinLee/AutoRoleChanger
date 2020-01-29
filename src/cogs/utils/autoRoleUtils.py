@@ -9,11 +9,12 @@ from typing import TYPE_CHECKING, Optional, Dict, List, Union, Tuple, NamedTuple
 
 import discord
 from discord.ext import tasks, commands
+from discord import utils
 
 from fuzzywuzzy import fuzz
 from fuzzywuzzy import process
 
-from db import AllowableRoles
+from postgresDB import AllowableRoles, DBMember, get_members_by_discord_account
 
 if TYPE_CHECKING:
     from discordBot import PNBot
@@ -103,3 +104,65 @@ async def parse_csv_roles(ctx: commands.Context, role_text: str, allowed_roles: 
 
     parsed_roles = ParsedRoles(good_roles=good_roles, bad_roles=bad_roles, disallowed_roles=disallowed_roles)
     return parsed_roles
+
+
+class InvalidMember(NamedTuple):
+    member_name: str
+    best_match: Optional[DBMember]
+    score: Optional[int]
+
+
+class ParsedMembers(NamedTuple):
+    good_members: List[DBMember]
+    invalid_members: List[InvalidMember]
+
+
+async def parse_csv_members(pool, discord_id: int, member_csv: str) -> Optional[NamedTuple]:
+
+    db_members = await get_members_by_discord_account(pool, discord_id)
+    csv_regex = "(.+?)(?:,|$)"
+
+    if len(member_csv) == 0:
+        return None
+
+    # Make sure that the string ends in a comma for proper regex detection
+    if member_csv[-1] != ",":
+        member_csv += ","
+
+    # Pull out the members from teh CSV
+    raw_members = re.findall(csv_regex, member_csv)
+
+    # If we couldn't pull anything, return None.
+    if len(raw_members) == 0:
+        return None
+
+    log.info(raw_members)
+
+    names_and_ids = [m.member_name for m in db_members] + [m.pk_mid for m in db_members]
+    valid_members = []
+    invalid_members = []
+
+    for raw_member in raw_members:
+        raw_member: str = raw_member.strip().lower()
+
+        potential_member = utils.find(lambda m: (m.member_name == raw_member or m.pk_mid == raw_member), db_members)
+        if potential_member is not None:
+            valid_members.append(potential_member)
+        else:
+
+            match = process.extractOne(raw_member, names_and_ids, score_cutoff=0)
+
+            # If we can't match, match will be None. Assign accordingly.
+            best_match = match[0] if match else None
+            score = match[1] if match else None
+
+            # Check to see if the type is DBMember.
+            if isinstance(best_match, DBMember):
+                invalid = InvalidMember(member_name=raw_member, best_match=best_match, score=score)  # Add the member
+            else:
+                invalid = InvalidMember(member_name=raw_member, best_match=None, score=None)  # This shouldnt be needed...
+
+            invalid_members.append(invalid)
+
+    parsed_members = ParsedMembers(good_members=valid_members, invalid_members=invalid_members)
+    return parsed_members
