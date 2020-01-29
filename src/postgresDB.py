@@ -243,8 +243,17 @@ async def fake_member_update(pool: asyncpg.pool.Pool, pk_mid: str):
            WHERE pk_mid = $2""", update_ts, pk_mid)
 
 
-
 # --- Get Member(s) --- #
+
+
+class DBMember(NamedTuple):
+    pk_mid: str
+    pk_sid: str
+    member_name: str
+    fronting: bool
+    last_update: int
+
+
 members_map = ["pk_sid", "pk_mid", "member_name", "fronting", "last_update"]
 @db_deco
 async def get_members_by_pk_sid(pool: asyncpg.pool.Pool, pk_sid: str) -> List[Dict]:  # Not currently in use.
@@ -264,7 +273,23 @@ async def get_members_by_pk_sid(pool: asyncpg.pool.Pool, pk_sid: str) -> List[Di
 
 
 @db_deco
-async def get_members_by_discord_account(pool: asyncpg.pool.Pool, discord_user_id: int) -> Optional[List[asyncpg.Record]]:
+async def get_members_by_discord_account(pool: asyncpg.pool.Pool, discord_user_id: int) -> Optional[List[DBMember]]:
+    async with pool.acquire() as conn:
+        conn: asyncpg.connection.Connection
+        """members_map = ["pk_sid", "pk_mid", "member_name", "fronting", "last_update"]"""
+        raw_rows = await conn.fetch("""
+                                    SELECT members.pk_sid, members.pk_mid, members.member_name, members.fronting, members.last_update
+                                    from members
+                                    INNER JOIN accounts on accounts.pk_sid = members.pk_sid
+                                    WHERE accounts.dis_uid = $1""", discord_user_id)
+        if len(raw_rows) > 0:
+            return [DBMember(**row) for row in raw_rows] #raw_rows
+        else:
+            return None
+
+
+@db_deco
+async def get_members_by_discord_account_old(pool: asyncpg.pool.Pool, discord_user_id: int) -> Optional[List[asyncpg.Record]]:
     async with pool.acquire() as conn:
         conn: asyncpg.connection.Connection
         """members_map = ["pk_sid", "pk_mid", "member_name", "fronting", "last_update"]"""

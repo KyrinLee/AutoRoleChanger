@@ -21,7 +21,7 @@ import postgresDB as db
 import cogs.utils.pluralKit as pk
 import cogs.utils.reactMenu as reactMenu
 from cogs.utils.paginator import FieldPages
-from cogs.utils.autoRoleUtils import parse_csv_roles, ParsedRoles
+from cogs.utils.autoRoleUtils import parse_csv_roles, ParsedRoles, parse_csv_members, ParsedMembers
 import cogs.utils.autoRoleEmbeds as arcEmbeds
 
 from cogs.utils.dLogger import dLogger
@@ -69,22 +69,25 @@ class AutoRoleChanger(commands.Cog):
         author: Union[discord.Member, discord.User] = message.author
         if not author.bot:
             msg = message.content.lower().strip()
-            if msg.startswith("pk;sw") or msg.startswith("pk!sw"):
-                await self.info(F"PluralKit switch command detected! Checking for new fronters in 30 seconds. System: {message.author.display_name}")
-                await asyncio.sleep(30)  # Pause to let API catch up
-                await self.info(f"Now checking fronters for {message.author.display_name}, attempting to call: update_only_fronters")
-                # pk_info = await self.get_pk_system_by_discord_id(message.author.id)
-                # await self.update_system(message=message)
-                # await self.update_only_fronters(message=message)
-                await self.update_system_members(force_member_update=True, message=message)
-            else:
-                # await self.info(f"Message received from {message.author.display_name}, attempting to call: update_system")
+            try:
+                if msg.startswith("pk;sw") or msg.startswith("pk!sw"):
+                    await self.info(F"PluralKit switch command detected! Checking for new fronters in 30 seconds. System: {message.author.display_name}")
+                    await asyncio.sleep(30)  # Pause to let API catch up
+                    await self.info(f"Now checking fronters for {message.author.display_name}, attempting to call: update_only_fronters")
+                    # pk_info = await self.get_pk_system_by_discord_id(message.author.id)
+                    # await self.update_system(message=message)
+                    # await self.update_only_fronters(message=message)
+                    await self.update_system_members(force_member_update=True, message=message)
+                else:
+                    # await self.info(f"Message received from {message.author.display_name}, attempting to call: update_system")
 
-                # Once an hour, make sure that the entire systems info is updated.
-                # This done based off the last updated time in the DB
-                # await self.update_members(message=message, time_override=60 * 60)
+                    # Once an hour, make sure that the entire systems info is updated.
+                    # This done based off the last updated time in the DB
+                    # await self.update_members(message=message, time_override=60 * 60)
 
-                await self.update_system_members(db_expiration_age=60*60, message=message)# Update from any message once an hour (The default time)
+                    await self.update_system_members(db_expiration_age=60*60, message=message)# Update from any message once an hour (The default time)
+            except PluralKitPrivacyError:
+                pass  # We can't do much in this case... so just keep going...
 
 
     @commands.Cog.listener()
@@ -208,7 +211,7 @@ class AutoRoleChanger(commands.Cog):
                 # 'Fake" an update so we don't hammer the PK API
                 for stale_member in stale_members:
                     await db.fake_member_update(self.pool, stale_member['pk_mid'])
-            return
+            raise MemberListHidden
 
         updated_fronters = await self.get_fronters(system_id)  # TODO: Ask alyssa & astrid about using GET /s/<id>/switches[?before=] first.
 
@@ -451,7 +454,10 @@ class AutoRoleChanger(commands.Cog):
             # We have very low threshold here so that way we don't get in the users way too much
             # The limit IS needed however, if not only to prevent abuse,
             # but to prevent update_system_members from being called twice when WE update the name
-            await self.update_system_members(discord_member=after, db_expiration_age=60 * 1)
+            try:
+                await self.update_system_members(discord_member=after, db_expiration_age=60 * 1)
+            except PluralKitPrivacyError:
+                pass  # Not much that can be done...
 
     @commands.is_owner()
     @commands.command(name="crash")
@@ -620,7 +626,12 @@ class AutoRoleChanger(commands.Cog):
     async def update_command(self, ctx: commands.Context):
         await self.warning(f"{ctx.author.name} used update")
         msg = await ctx.send("Updating...")
-        await self.update_system_members(force_discord_update=True, ctx=ctx)
+        try:
+            await self.update_system_members(force_discord_update=True, ctx=ctx)
+        except PluralKitPrivacyError:
+            await msg.edit(content=f"Unable to update! ARC is not yet compatible with some PK Privacy settings.")
+            return
+
         if authorized_guilds is None or ctx.guild.id in authorized_guilds:
             user_settings = await db.get_user_settings_from_discord_id(self.pool, ctx.author.id, ctx.guild.id)
             if not user_settings or not user_settings.role_change and not user_settings.name_change:
@@ -657,7 +668,7 @@ class AutoRoleChanger(commands.Cog):
     @commands.command(aliases=["list_all", "list_all_roles"], brief="See what roles are assigned to all of your system members.")
     async def list_all_member_roles(self, ctx: commands.Context):
 
-        members = await db.get_members_by_discord_account(self.pool, ctx.author.id)
+        members = await db.get_members_by_discord_account_old(self.pool, ctx.author.id)
 
         if members is None or len(members) == 0:
             await ctx.send(
@@ -756,7 +767,7 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
 
-            members = await db.get_members_by_discord_account(self.pool, ctx.author.id)  # ctx.author.id)
+            members = await db.get_members_by_discord_account_old(self.pool, ctx.author.id)  # ctx.author.id)
             if members is None or len(members) == 0:
 
                 await ctx.send(
@@ -878,10 +889,10 @@ class AutoRoleChanger(commands.Cog):
                                        additional="Please enter a System Member below:",
                                        callback=self.select_member_for_role)
 
-            add_roles_from_discord_user = reactMenu.Page("str", name="Apply current roles to a member",
-                                       body="Makes the selected member have the roles currently on your discord account.",
-                                       additional="Please enter a System Member below:",
-                                       callback=self.select_member_for_current_roles)
+            # add_roles_from_discord_user = reactMenu.Page("str", name="Apply current roles to a member",
+            #                            body="Makes the selected member have the roles currently on your discord account.",
+            #                            additional="Please enter a System Member below:",
+            #                            callback=self.select_member_for_current_roles)
 
             add_roles_to_all_members = reactMenu.Page("str",
                                      name="Add roles to all your members",
@@ -926,7 +937,7 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
 
-            members = await db.get_members_by_discord_account(self.pool, ctx.author.id)  # ctx.author.id)
+            members = await db.get_members_by_discord_account_old(self.pool, ctx.author.id)  # ctx.author.id)
             if members is None or len(members) == 0:
                 await ctx.send(
                     f"You do not have a Plural Kit account registered. Use `{self.bot.command_prefix}register` to register your system.")
@@ -953,29 +964,29 @@ class AutoRoleChanger(commands.Cog):
                 # await ctx.send("Finished adding roles!")
                 await self.ask_to_go_back()
 
-
-        async def select_member_for_current_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
-                                                  response: discord.Message):
-
-            member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
-            if member is None:
-                await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID.")
-            else:
-                self.member = member
-
-                verify_prompt = reactMenu.Page("bool",
-                                           name=f"Are you sure you want to set all roles that are currently on your discord account onto {member['member_name']}? ",
-                                           # body="Click ✅ or ❌",
-                                           callback=self.verify_set_all_roles)
-                await verify_prompt.run(self.bot, ctx)
-
-        async def verify_set_all_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
-                                       response: bool):
-            if response:
-                # Todo: Implement
-                await ctx.send(f"Setting all roles")
-            else:
-                await ctx.send(f"Canceled!")
+        #
+        # async def select_member_for_current_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
+        #                                           response: discord.Message):
+        #
+        #     member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
+        #     if member is None:
+        #         await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID.")
+        #     else:
+        #         self.member = member
+        #
+        #         verify_prompt = reactMenu.Page("bool",
+        #                                    name=f"Are you sure you want to set all roles that are currently on your discord account onto {member['member_name']}? ",
+        #                                    # body="Click ✅ or ❌",
+        #                                    callback=self.verify_set_all_roles)
+        #         await verify_prompt.run(self.bot, ctx)
+        #
+        # async def verify_set_all_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
+        #                                response: bool):
+        #     if response:
+        #         # Todo: Implement
+        #         await ctx.send(f"Setting all roles")
+        #     else:
+        #         await ctx.send(f"Canceled!")
 
         # --- Add Roles to member prompts --- #
         async def select_member_for_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context, response: discord.Message):
@@ -991,6 +1002,28 @@ class AutoRoleChanger(commands.Cog):
                                            callback=self.add_role,
                                            timeout=300)
                 await add_roles.run(self.bot, ctx)
+
+
+        # async def select_members_for_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context, response: discord.Message):
+        #
+        #     #
+        #     # members = await db.get_members_by_discord_account(self.pool, ctx.author.id)
+        #
+        #     # member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
+        #     members = await parse_csv_members(self.pool, ctx.author.id, response.content)
+        #     if len(members) == 0:
+        #         await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID")
+        #
+        #     else:
+        #
+        #         self.member = member
+        #         add_roles = reactMenu.Page("str",
+        #                                    name=f"Add roles to member {member['member_name']}",
+        #                                    body="Please enter a role or multiple roles separated by commas below: (Timesout in 300 seconds)",
+        #                                    callback=self.add_role,
+        #                                    timeout=300)
+        #         await add_roles.run(self.bot, ctx)
+
 
         async def add_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                            response: discord.Message):
@@ -1466,8 +1499,11 @@ class AutoRoleChanger(commands.Cog):
         try:
             async with aiohttp.ClientSession() as session:
                 await self.warning(f"Scraping: {f'https://api.pluralkit.me/s/{pk_sys_id}/fronters'}")
-                fronters = await pk.Fronters.get_by_hid(session, pk_sys_id)
-                return fronters
+                try:
+                    fronters = await pk.Fronters.get_by_hid(session, pk_sys_id)
+                    return fronters
+                except pk.Unauthorized:
+                    raise FrontersHidden
         except aiohttp.ClientError as e:
             log.warning(
                 "Could not connect to PK server with out errors. \n{}".format(e))
@@ -1526,7 +1562,15 @@ class UnableToParseSystemCard(Exception):
     pass
 
 
-class MemberListHidden(Exception):
+class PluralKitPrivacyError(Exception):
+    pass
+
+
+class MemberListHidden(PluralKitPrivacyError):
+    pass
+
+
+class FrontersHidden(PluralKitPrivacyError):
     pass
 
 
