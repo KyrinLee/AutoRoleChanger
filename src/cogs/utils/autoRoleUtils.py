@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, Optional, Dict, List, Union, Tuple, NamedTuple
 
 import discord
 from discord.ext import tasks, commands
+
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
+
 from db import AllowableRoles
 
 if TYPE_CHECKING:
@@ -17,11 +21,23 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+class BadRole(NamedTuple):
+    role: str
+    best_match: Optional[discord.Role]
+    score: Optional[int]
+
+    def __str__(self):
+        # if self.best_match is not None:
+        #     string = f"{self.role} [Maybe {self.best_match[0]} ({self.best_match[1]})]"
+        # else:
+        string = f"{self.role}"
+        return string
+
+
 class ParsedRoles(NamedTuple):
     good_roles: List[discord.Role]
     disallowed_roles: List[discord.Role]
-    bad_roles: List[str]
-
+    bad_roles: List[BadRole]
 
 
 async def parse_csv_roles(ctx: commands.Context, role_text: str, allowed_roles: Optional[AllowableRoles] = None) -> Optional[NamedTuple]:
@@ -54,18 +70,36 @@ async def parse_csv_roles(ctx: commands.Context, role_text: str, allowed_roles: 
     good_roles = []
     bad_roles = []
     disallowed_roles = []
+
+    guild_roles: List[discord.Role] = ctx.guild.roles[1:]  # Get all the roles from the guild EXCEPT @everyone.
     for raw_role in raw_roles:
+        raw_role = raw_role.strip()  # Remove any leading/trailing whitespace
         try:
             # add identifiable roles to the good list
             # Todo: Try to match up Snowflake like raw roles to the roles in self.allowable_roles and bypass the RoleConverter on success.
-            potential_role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
+            potential_role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role)  # Try to match the text to an actual role.
             if allowed_roles is None or allowed_roles.is_allowed(potential_role):
+                # Add the role to the good list IF it's on the allowed list, or if there is no allowed list.
                 good_roles.append(potential_role)
             else:
+                # If we get here, it's because the role exists but is not allowed to be used by users.
                 disallowed_roles.append(potential_role)
-        except commands.errors.BadArgument:
-            # Role could not be found. Add to bad list.
-            bad_roles.append(raw_role)
+
+        except commands.errors.BadArgument:  # This error indicates that the RoleConverter() failed to identify the role.
+            # Role could not be found. Try to use fuzzyWuzzy string matching to try to identify the role despite typos.
+            match = process.extractOne(raw_role, guild_roles, score_cutoff=0)
+
+            # If we can't match, match will be None. Assign accordingly.
+            best_match = match[0] if match else None
+            score = match[1] if match else None
+
+            # Check to see if the type is role and if it is on the allowed list.
+            if isinstance(best_match, discord.Role) and allowed_roles.is_allowed(best_match):
+                bad_role = BadRole(role=raw_role, best_match=best_match, score=score)  # Add the suggestion since it IS an allowed role.
+            else:
+                bad_role = BadRole(role=raw_role, best_match=None, score=None)  # Don't recommend roles that Users can't set.
+
+            bad_roles.append(bad_role)
 
     parsed_roles = ParsedRoles(good_roles=good_roles, bad_roles=bad_roles, disallowed_roles=disallowed_roles)
     return parsed_roles

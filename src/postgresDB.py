@@ -61,6 +61,17 @@ async def add_new_system(pool: asyncpg.pool.Pool, pk_sid: str, system_name: str,
              pk_sid, system_name, pk_system_tag, pk_token, update_ts)
 
 
+# --- System DB Functions --- #
+@db_deco
+async def remove_system(pool: asyncpg.pool.Pool, pk_sid: str):
+    """ """
+    async with pool.acquire() as conn:
+        conn: asyncpg.connection.Connection
+        await conn.execute(
+            "DELETE FROM systems WHERE pk_sid = $1",
+             pk_sid)
+
+
 @db_deco
 async def add_linked_discord_account(pool: asyncpg.pool.Pool, pk_sid: str, dis_uid: int):
     async with pool.acquire() as conn:
@@ -216,6 +227,20 @@ async def update_member(pool: asyncpg.pool.Pool, pk_sid: str, pk_mid: str, membe
             """UPDATE systems
                SET last_update = $1
                WHERE pk_sid = $2""", update_ts, pk_sid)
+
+
+@db_deco
+async def fake_member_update(pool: asyncpg.pool.Pool, pk_mid: str):
+    """This just updates the last_update time to 24 hours in the future as a temporary work around for PK Privacy issues."""
+    pk_mid = pk_mid.lower()  # Just to be sure...
+    async with pool.acquire() as conn:
+        conn: asyncpg.connection.Connection
+        # Convert ts to int
+        update_ts: datetime = datetime.utcnow().timestamp() + 60*60*24
+    await conn.execute(
+        """UPDATE members
+           SET last_update = $1
+           WHERE pk_mid = $2""", update_ts, pk_mid)
 
 
 
