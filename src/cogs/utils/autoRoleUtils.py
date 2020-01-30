@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Optional, Dict, List, Union, Tuple, NamedTuple
 
 import discord
 from discord.ext import tasks, commands
-from postgresDB import AllowableRoles, UserSettings, update_system_role
+from discord import utils
+
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
+
+from postgresDB import AllowableRoles, DBMember, get_members_by_discord_account, UserSettings, update_system_role
 
 if TYPE_CHECKING:
     from discordBot import PNBot
@@ -27,11 +32,23 @@ class GuildSettings(NamedTuple):
     custom_roles: bool
 
 
+class BadRole(NamedTuple):
+    role: str
+    best_match: Optional[discord.Role]
+    score: Optional[int]
+
+    def __str__(self):
+        # if self.best_match is not None:
+        #     string = f"{self.role} [Maybe {self.best_match[0]} ({self.best_match[1]})]"
+        # else:
+        string = f"{self.role}"
+        return string
+
+
 class ParsedRoles(NamedTuple):
     good_roles: List[discord.Role]
     disallowed_roles: List[discord.Role]
-    bad_roles: List[str]
-
+    bad_roles: List[BadRole]
 
 async def get_system_role(pool, guild: discord.Guild, system_role_id: Optional[int], system_role_enabled: bool,
                           system_id: str, system_name: str, fronters_favorite_color: Optional[str]) -> Optional[discord.Role]:
@@ -108,18 +125,98 @@ async def parse_csv_roles(ctx: commands.Context, role_text: str, allowed_roles: 
     good_roles = []
     bad_roles = []
     disallowed_roles = []
+
+    guild_roles: List[discord.Role] = ctx.guild.roles[1:]  # Get all the roles from the guild EXCEPT @everyone.
     for raw_role in raw_roles:
+        raw_role = raw_role.strip()  # Remove any leading/trailing whitespace
         try:
             # add identifiable roles to the good list
             # Todo: Try to match up Snowflake like raw roles to the roles in self.allowable_roles and bypass the RoleConverter on success.
-            potential_role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role.strip())
+            potential_role: discord.Role = await commands.RoleConverter().convert(ctx, raw_role)  # Try to match the text to an actual role.
             if allowed_roles is None or allowed_roles.is_allowed(potential_role):
+                # Add the role to the good list IF it's on the allowed list, or if there is no allowed list.
                 good_roles.append(potential_role)
             else:
+                # If we get here, it's because the role exists but is not allowed to be used by users.
                 disallowed_roles.append(potential_role)
-        except commands.errors.BadArgument:
-            # Role could not be found. Add to bad list.
-            bad_roles.append(raw_role)
+
+        except commands.errors.BadArgument:  # This error indicates that the RoleConverter() failed to identify the role.
+            # Role could not be found. Try to use fuzzyWuzzy string matching to try to identify the role despite typos.
+            match = process.extractOne(raw_role, guild_roles, score_cutoff=0)
+
+            # If we can't match, match will be None. Assign accordingly.
+            best_match = match[0] if match else None
+            score = match[1] if match else None
+
+            # Check to see if the type is role and if it is on the allowed list.
+            if isinstance(best_match, discord.Role) and allowed_roles.is_allowed(best_match):
+                bad_role = BadRole(role=raw_role, best_match=best_match, score=score)  # Add the suggestion since it IS an allowed role.
+            else:
+                bad_role = BadRole(role=raw_role, best_match=None, score=None)  # Don't recommend roles that Users can't set.
+
+            bad_roles.append(bad_role)
 
     parsed_roles = ParsedRoles(good_roles=good_roles, bad_roles=bad_roles, disallowed_roles=disallowed_roles)
     return parsed_roles
+
+
+class InvalidMember(NamedTuple):
+    member_name: str
+    best_match: Optional[DBMember]
+    score: Optional[int]
+
+
+class ParsedMembers(NamedTuple):
+    good_members: List[DBMember]
+    invalid_members: List[InvalidMember]
+
+
+async def parse_csv_members(pool, discord_id: int, member_csv: str) -> Optional[NamedTuple]:
+
+    db_members = await get_members_by_discord_account(pool, discord_id)
+    csv_regex = "(.+?)(?:,|$)"
+
+    if len(member_csv) == 0:
+        return None
+
+    # Make sure that the string ends in a comma for proper regex detection
+    if member_csv[-1] != ",":
+        member_csv += ","
+
+    # Pull out the members from teh CSV
+    raw_members = re.findall(csv_regex, member_csv)
+
+    # If we couldn't pull anything, return None.
+    if len(raw_members) == 0:
+        return None
+
+    log.info(raw_members)
+
+    names_and_ids = [m.member_name for m in db_members] + [m.pk_mid for m in db_members]
+    valid_members = []
+    invalid_members = []
+
+    for raw_member in raw_members:
+        raw_member: str = raw_member.strip().lower()
+
+        potential_member = utils.find(lambda m: (m.member_name == raw_member or m.pk_mid == raw_member), db_members)
+        if potential_member is not None:
+            valid_members.append(potential_member)
+        else:
+
+            match = process.extractOne(raw_member, names_and_ids, score_cutoff=0)
+
+            # If we can't match, match will be None. Assign accordingly.
+            best_match = match[0] if match else None
+            score = match[1] if match else None
+
+            # Check to see if the type is DBMember.
+            if isinstance(best_match, DBMember):
+                invalid = InvalidMember(member_name=raw_member, best_match=best_match, score=score)  # Add the member
+            else:
+                invalid = InvalidMember(member_name=raw_member, best_match=None, score=None)  # This shouldnt be needed...
+
+            invalid_members.append(invalid)
+
+    parsed_members = ParsedMembers(good_members=valid_members, invalid_members=invalid_members)
+    return parsed_members
