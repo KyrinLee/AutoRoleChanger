@@ -48,6 +48,9 @@ async def create_db_pool(uri: str) -> asyncpg.pool.Pool:
 
     return pool
 
+async def test():
+    return DBGuildSettings(guild_id=1)
+
 
 # --- System DB Functions --- #
 @db_deco
@@ -88,21 +91,30 @@ async def get_system_id_by_discord_account(pool: asyncpg.pool.Pool, dis_uid: int
         else:
             return None
 
-@db_deco
-async def get_system_tag_by_pk_sid(pool: asyncpg.pool.Pool, pk_sid: str) -> Optional:  # Not currently in use.
-    """ Returns just the pk_system_tag column from one row of 'systems' for a given pk system id."""
-    raise NotImplementedError
-    # async with aiosqlite.connect(db) as conn:
-    #     system_tag_map = ['pk_system_tag', 'system_tag_override', 'system_name']
-    #     cursor = await conn.execute(" SELECT pk_system_tag from systems WHERE pk_sid = ?", (pk_sid,))
-    #     row = await cursor.fetchone()
-    #
-    #     if row is not None and len(row) > 0:
-    #         tag = dict(zip(system_tag_map, row))
-    #         return tag
-    #     else:
-    #         return None
 
+class DBSystem(NamedTuple):
+    pk_sid: str
+    system_name: Optional[str]
+    pk_token: Optional[str]
+    current_fronter: Optional[str]
+    pk_system_tag: Optional[str]
+    last_update: int
+
+
+@db_deco
+async def get_system_by_discord_account(pool: asyncpg.pool.Pool, dis_uid: int) -> Optional[DBSystem]:
+    """ Returns just the pk_system_tag column from one row of 'systems' for a given pk system id."""
+    async with pool.acquire() as conn:
+        conn: asyncpg.connection.Connection
+        raw_row = await conn.fetchrow("""SELECT systems.pk_sid, systems.system_name, systems.pk_token, systems.current_fronter, systems.pk_system_tag, systems.last_update 
+                                         from systems 
+                                         INNER JOIN accounts on accounts.pk_sid = systems.pk_sid
+                                         WHERE accounts.dis_uid = $1
+                                         """, dis_uid)
+        if raw_row is not None:
+            return DBSystem(**raw_row)
+        else:
+            return None
 
 
 @db_deco
@@ -280,7 +292,7 @@ async def get_fronting_members_by_pk_sid(pool: asyncpg.pool.Pool, pk_sid: str) -
     async with pool.acquire() as conn:
         cursor = await conn.execute("""SELECT members.pk_mid 
                                        from members where pk_sid = ? and fronting = 1
-                                       COLLATE NOCASE""", (pk_sid, ))
+                                       """, (pk_sid, ))
         raw_rows = await cursor.fetchall()
         # rows = [dict(zip(members_map, row)) for row in raw_rows]
         rows = []
@@ -522,7 +534,9 @@ class UserSettings:
     guild_id: int
     name_change: bool
     role_change: bool
-    system_tag_override: Optional[set]
+    system_role: Optional[int]
+    system_role_enabled: Optional[bool]
+
     row_map = ['pk_sid', 'guild_id', 'name_change', 'role_change', 'system_tag_override']
 
     # TODO, add option to create default settign object. Till then, don't forget to update the default settings in the following places:
@@ -532,6 +546,8 @@ class UserSettings:
         self.guild_id: int = row['guild_id']
         self.name_change: bool = bool(row['name_change'])
         self.role_change: bool = bool(row['role_change'])
+        self.system_role: Optional[int] = row['system_role']
+        self.system_role_enabled: Optional[bool] = row['system_role_enabled']
         # self.system_tag_override: Optional[str] = row['system_tag_override]
 
 
@@ -559,14 +575,14 @@ async def update_user_setting(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: in
 
 
 @db_deco
-async def update_system_tag_override_user_setting(pool: asyncpg.pool.Pool, pk_sid: str, system_tag_override: str):  # Not currently in use.
+async def update_system_role(pool: asyncpg.pool.Pool, pk_sid: str, system_role: Optional[int], enabled: bool):  # Not currently in use.
     """For a future feature we will probably not implement"""
-    raise NotImplementedError
-    # async with pool.acquire() as conn:
-    #     await conn.execute("""UPDATE user_settings
-    #                           SET system_tag_override = ?
-    #                           WHERE pk_sid = ? AND guild_is = ?""", (system_tag_override, pk_sid))
-    #     await conn.commit()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+                              UPDATE user_settings
+                              SET system_role = $1, system_role_enabled = $2
+                              WHERE pk_sid = $3
+                            """, system_role, enabled, pk_sid)
 
 
 @db_deco
@@ -618,12 +634,13 @@ async def get_all_user_settings_from_discord_id(pool: asyncpg.pool.Pool, discord
         return all_user_settings
 
 
-@db_deco
-async def remove_user_settings(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: int):  # Not currently in use.
-        raise NotImplementedError
+# @db_deco
+# async def remove_user_settings(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: int):  # Not currently in use.
+#     raise NotImplementedError
 
 
 # --- Guild settings --- #
+
 
 @db_deco
 async def add_guild_setting(pool: asyncpg.pool.Pool, guild_id: int, name_change: bool, role_change: bool, log_channel: Optional[int], name_logging: bool, role_logging: bool):
@@ -645,11 +662,34 @@ async def update_all_guild_setting(pool: asyncpg.pool.Pool, guild_id: int, name_
 
 
 @db_deco
+async def update_custom_role_guild_setting(pool: asyncpg.pool.Pool, guild_id: int, custom_role_setting: bool):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+                            UPDATE guilds
+                            SET custom_roles = $1
+                            WHERE guild_id = $2
+                            """, custom_role_setting, guild_id)
+
+
+@db_deco
 async def remove_guild_setting(pool: asyncpg.pool.Pool, guild_id: int):
     async with pool.acquire() as conn:
         await conn.execute("""
-                            DELETE FROM guilds where guild_is = $1
+                            DELETE FROM guilds where guild_id = $1
                             """, guild_id)
+
+
+@db_deco
+async def get_guild_settings(pool: asyncpg.pool.Pool, guild_id: int):# -> Optional[DBGuildSettings]:
+    """Gets the guild_settings for a guild by the guildID."""
+    async with pool.acquire() as conn:
+        raw_row = await conn.fetchrow(" SELECT * from guilds where guild_id = $1", guild_id)
+        if raw_row is None:
+            return None
+
+        return raw_row
+
+
 
 
 # ---------- Table Migration ---------- #
@@ -714,7 +754,8 @@ async def create_tables(pool: asyncpg.pool.Pool):
                            role_change          boolean default TRUE,
                            log_channel          bigint default null,
                            name_logging         boolean default TRUE,
-                           role_logging         boolean default TRUE
+                           role_logging         boolean default TRUE,
+                           custom_roles         boolean default FALSE
                         );
                     ''')
 
@@ -742,6 +783,8 @@ async def create_tables(pool: asyncpg.pool.Pool):
                                guild_id             bigint not null NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
                                name_change          boolean default FALSE,
                                role_change          boolean default TRUE,
+                               system_role          bigint default NULL,
+                               system_role_enabled  boolean default false, 
                                PRIMARY KEY (pk_sid, guild_id)
                             );
                         ''')

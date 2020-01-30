@@ -21,7 +21,7 @@ import postgresDB as db
 import cogs.utils.pluralKit as pk
 import cogs.utils.reactMenu as reactMenu
 from cogs.utils.paginator import FieldPages
-from cogs.utils.autoRoleUtils import parse_csv_roles, ParsedRoles
+from cogs.utils.autoRoleUtils import parse_csv_roles, ParsedRoles, get_system_role, GuildSettings
 
 from cogs.utils.dLogger import dLogger
 from botExceptions import UnsupportedGuild
@@ -270,7 +270,6 @@ class AutoRoleChanger(commands.Cog):
 
         return updated_system
 
-
     class UserRoles(NamedTuple):
         guild_id: int
         roles: List[discord.Object]
@@ -302,7 +301,6 @@ class AutoRoleChanger(commands.Cog):
     #
     #         for role
 
-
     async def autochange_discord_user_across_discord(self, discord_member: Union[discord.Member, discord.User],
                                                      pk_system_id: str, updated_fronters: Optional[pk.Fronters]):
 
@@ -314,13 +312,39 @@ class AutoRoleChanger(commands.Cog):
 
         if all_user_settings is not None:
 
+            if updated_system is None:  # TODO: Only update system if needed.
+                updated_system = await self.update_system(system_id=pk_system_id)
+
             for user_settings_in_guild in all_user_settings:
+                system_role = None
                 current_guild: discord.Guild = self.bot.get_guild(user_settings_in_guild.guild_id)
                 if current_guild is None:
                     continue  # Couldn't get guild... Skip
-                current_discord_user = current_guild.get_member(discord_member_id)
+                current_discord_user:discord.Member = current_guild.get_member(discord_member_id)
                 if current_discord_user is None:
                     continue  # Couldn't get member... Skip
+
+                guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, current_guild.id))
+
+
+                if guild_settings is not None and guild_settings.custom_roles:
+                    # Get the current fronter, or None if now one is fronting
+                    current_fronter = updated_fronters.members[0] if len(updated_fronters.members) > 0 else None
+
+                    # Get the current fronters favorite color or None if no one is fronting.
+                    current_fronters_color = current_fronter.color if current_fronter else None
+                    current_fronter_name = current_fronter.name if current_fronter else None
+
+                    # Try to get the system name for the role, use the fronters name as a back up, and system ID as a final resort.
+                    system_role_name = updated_system.name or current_fronter_name or updated_system.hid
+
+                    # Get the system role (Or None if they have it disabled)
+                    system_role = await get_system_role(self.pool, guild=current_guild, system_role_id=user_settings_in_guild.system_role,
+                                                        system_role_enabled=user_settings_in_guild.system_role_enabled,
+                                                        system_id=user_settings_in_guild.pk_sid, system_name=system_role_name,
+                                                        fronters_favorite_color=current_fronters_color)
+
+                    await current_discord_user.add_roles(system_role)  # Todo: Maybe add this into get_system_role? Also check if they have it first?
 
                 if user_settings_in_guild.role_change:
                     new_roles = await self.get_new_roles(updated_fronters, user_settings_in_guild.guild_id)
@@ -335,7 +359,8 @@ class AutoRoleChanger(commands.Cog):
                     old_roles_to_keep = guild_allowed_auto_roles.disallowed_intersection(current_discord_user.roles)
 
                     # Use a set to ensure there are no duplicates.
-                    roles_to_set = set(allowed_new_roles + old_roles_to_keep)
+                    account_role_to_set = [system_role] if system_role is not None else []
+                    roles_to_set = set(allowed_new_roles + old_roles_to_keep + account_role_to_set)
                     await self.info(f"Applying the following roles: {roles_to_set}")
 
                     try:
@@ -345,19 +370,15 @@ class AutoRoleChanger(commands.Cog):
 
                 if user_settings_in_guild.name_change and len(updated_fronters.members) > 0:  # TODO: Add option to set system name as nickname when no one is fronting.
 
-                    # if user_settings.system_tag_override is None:
-                    if updated_system is None:
-                        updated_system = await self.update_system(system_id=pk_system_id)
-                        system_tag = updated_system.tag
-
-                        max_nickname_length = 32
-                        if system_tag:
-                            system_tag_length = len(system_tag) + 1  # + 1 due to Space between tag and name.
-                            shortened_member_name = updated_fronters.members[0].proxied_name[
-                                                    :max_nickname_length - system_tag_length]
-                            new_name = f"{shortened_member_name} {system_tag}" if system_tag else updated_fronters.members[0].proxied_name[:max_nickname_length]
-                        else:
-                            new_name = updated_fronters.members[0].proxied_name[:max_nickname_length]
+                    system_tag = updated_system.tag
+                    max_nickname_length = 32
+                    if system_tag:
+                        system_tag_length = len(system_tag) + 1  # + 1 due to Space between tag and name.
+                        shortened_member_name = updated_fronters.members[0].proxied_name[
+                                                :max_nickname_length - system_tag_length]
+                        new_name = f"{shortened_member_name} {system_tag}" if system_tag else updated_fronters.members[0].proxied_name[:max_nickname_length]
+                    else:
+                        new_name = updated_fronters.members[0].proxied_name[:max_nickname_length]
 
                     await self.info(f"Changing {discord_member.display_name} name to {new_name}'s name")
                     try:
@@ -447,9 +468,11 @@ class AutoRoleChanger(commands.Cog):
             await self.update_system_members(discord_member=after, db_expiration_age=60 * 1)
 
     @commands.is_owner()
-    @commands.command(name="crash")
-    async def crash(self, ctx):
-        assert 1 == 0
+    @commands.command(name="add_guild")
+    async def add_guild(self, ctx):
+        gs = GuildSettings(** await db.get_guild_settings(self.pool, ctx.guild.id)) #test()
+
+        # await db.add_guild_setting(self.pool, ctx.guild.id, True, True, None, False, False)
 
     # ----- Help & About Commands ----- #
 
@@ -1121,7 +1144,7 @@ class AutoRoleChanger(commands.Cog):
     @commands.command(aliases=["config", "setting", "user_setting", "user_settings"],
                       brief="Change user settings such as Auto Name Change and Auto Role Change")
     async def settings(self, ctx: commands.Context):
-        settings = self.UserSettingsRolesMenuHandler(self.bot, ctx)
+        settings = self.UserSettingsRolesMenuHandler(self.bot, ctx, self)
         await settings.run()
 
     class UserSettingsRolesMenuHandler:
@@ -1132,31 +1155,38 @@ class AutoRoleChanger(commands.Cog):
             Update all accounts, just the active account, or a list of accounts?
         """
 
-        def __init__(self, bot, ctx):
+        def __init__(self, bot, ctx, cog):
             self.bot = bot
             self.pool = bot.pool
             self.ctx = ctx
+            self.cog = cog
 
             self.current_user_settings: Optional[db.UserSettings] = None
+            self.system: Optional[db.DBSystem] = None
+            self.guild_settings = db.DBGuildSettings = None
 
         async def run(self):
-            check_if_registed = await db.get_system_id_by_discord_account(self.pool, self.ctx.author.id)
-            if check_if_registed is None:
+            self.system = await db.get_system_by_discord_account(self.pool, self.ctx.author.id)
+            if self.system is None:
                 await self.ctx.send("You do not seem to be registered with this bot. "
                                     f"Please use reg_sys to `{self.bot.command_prefix}register` a new account or update your existing account")
                 return
-
+            # self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
+            # TODO: Change to getting user settigns via PK SID
             self.current_user_settings = await db.get_user_settings_from_discord_id(self.pool, self.ctx.author.id, self.ctx.guild.id)
             if self.current_user_settings is None:
                 # Load default user settings in case none exist, then create a UserSettings obj manually
-                await db.update_user_setting(self.pool, check_if_registed['pk_sid'], self.ctx.guild.id, False, False)
-                self.current_user_settings = db.UserSettings({'pk_sid': check_if_registed['pk_sid'],
+                await db.update_user_setting(self.pool, self.system.pk_sid, self.ctx.guild.id, False, False)
+                self.current_user_settings = db.UserSettings({'pk_sid': self.system.pk_sid,
                                                               'guild_id': self.ctx.guild.id,
                                                               'name_change': False,
-                                                              'role_change': False})
+                                                              'role_change': False,
+                                                              'system_role': None,
+                                                              'system_role_enabled': False})
 
             auto_name = "On" if self.current_user_settings.name_change else "Off"
             auto_role = "On" if self.current_user_settings.role_change else "Off"
+            system_role = "On" if self.current_user_settings.system_role_enabled else "Off"
 
             name_change = reactMenu.Page("bool", name="Toggle Auto Name Change",
                                          body=f"Toggles the automatic name change functionality. Currently **{auto_name}**",
@@ -1169,15 +1199,15 @@ class AutoRoleChanger(commands.Cog):
                                          additional="Click ✅ to toggle automatic role changes, or click ❌ to cancel",
                                          callback=self.role_change)
 
-            # set_system_tag_override = reactMenu.Page("Bool",
-            #                              name="Set/Remove an alternative system tag",
-            #                              body=f"Toggles the automatic role change functionality. Currently **{auto_role}**",
-            #                              additional="Click ✅ to toggle automatic role changes, or click ❌ to cancel",
-            #                              callback=self.set_system_tag_override)
+            system_role_toggle = reactMenu.Page("Bool",
+                                         name="Toggle Custom System Role",
+                                         body=f"Gives your discord account a dedicated role just for your system that will be automatically linked to your fronters favorite colors. Currently **{system_role}**",
+                                         additional="Click ✅ to toggle custom system role, or click ❌ to cancel",
+                                         callback=self.system_role_toggle)
 
             menu = reactMenu.Menu(name="Auto Role User Settings",
                                   body="Please select an option below by sending a message with the number",
-                                  pages=[name_change, role_change]) #, set_system_tag_override])
+                                  pages=[name_change, role_change, system_role_toggle]) #, set_system_tag_override])
 
             await menu.run(self.ctx)
 
@@ -1207,6 +1237,66 @@ class AutoRoleChanger(commands.Cog):
             else:
                 await self.ctx.send(f"Canceled!")
 
+        async def system_role_toggle(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
+                                     response: bool):
+            self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
+
+            if self.guild_settings is None or not self.guild_settings.custom_roles:
+                await ctx.send(f"Custom system roles have been disabled in this server and can not be enabled.")
+                await db.update_system_role(self.pool, self.system.pk_sid, None, False)
+                return
+
+            if response:
+                embed = discord.Embed(title="Custom System Role:")
+                # Invert the current setting
+                system_role_toggle_enabled = False if self.current_user_settings.system_role_enabled else True
+
+                if system_role_toggle_enabled:
+                    # Create the channel and
+                    try:
+                        fronters = await self.cog.get_fronters(self.current_user_settings.pk_sid)
+                    except pk.Unauthorized:
+                        return
+
+                    current_fronter = fronters.members[0] if len(fronters.members) > 0 else None
+
+                    # Get the current fronters favorite color or None if no one is fronting.
+                    current_fronters_color = current_fronter.color if current_fronter else None
+                    current_fronter_name = current_fronter.name if current_fronter else None
+
+                    # Try to get the system name for the role, use the fronters name as a back up, and system ID as a final resort.
+                    system_role_name = self.system.system_name or current_fronter_name or self.system.hid
+
+                    # Get / Create the system role and update the DB with the new/current
+                    system_role = await get_system_role(self.pool, guild=ctx.guild, system_role_id=self.current_user_settings.system_role,
+                                                        system_role_enabled=True, system_id=self.system.pk_sid, system_name=system_role_name,
+                                                        fronters_favorite_color=current_fronters_color)
+
+                    # TODO: We are possibly updating the DB twice in the case a System role did not exist yet. FIX!
+                    await db.update_system_role(self.pool, self.system.pk_sid, system_role.id, True)
+
+                    # give the user the new role
+                    author: discord.Member = ctx.author
+                    await author.add_roles(system_role)
+
+                    # Write the reponse embed
+                    embed.description = f"Your Systems Role <@&{system_role.id}> has been created and assigned to your account."
+                else:
+                    # Set the enable bit to False and delete the system role.
+                    guild: discord.Guild = ctx.guild
+
+                    if self.current_user_settings.system_role is not None:
+                        systems_role: discord.Role = await guild.get_role(self.current_user_settings.system_role)
+                        if systems_role is not None:
+                            await systems_role.delete()
+                    await db.update_system_role(self.pool, self.system.pk_sid, None, system_role_toggle_enabled)
+
+                    embed.description = f"Your Custom System Role has been removed"
+
+                await self.ctx.send(embed=embed)
+            else:
+                await self.ctx.send(f"Canceled!")
+
 
     @is_authorized_guild()
     @commands.has_permissions(manage_messages=True)
@@ -1226,9 +1316,19 @@ class AutoRoleChanger(commands.Cog):
             self.ctx = ctx
 
             self.allowable_roles: Optional[db.AllowableRoles] = None
+            self.guild_settings = None
+            self.guild_settings: Optional[db.DBGuildSettings] = None
 
         async def run(self):
             self.allowable_roles = await db.get_allowable_roles(self.pool, self.ctx.guild.id)
+            self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
+            if self.guild_settings is None:
+                # Somehow the guild doesnt have settings. Whoops. Add them now
+                await db.add_guild_setting(self.pool, self.ctx.guild.id, name_change=True, role_change=True,
+                                           log_channel=None, name_logging=False, role_logging=False)
+                self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
+
+            system_role = "**On**" if self.guild_settings.custom_roles else "**Off**"
 
             list_allowable_roles = reactMenu.Page(page_type="custom", name="List usable roles.",
                                                   body="Displays a list of all the roles users are allowed to use",
@@ -1246,9 +1346,14 @@ class AutoRoleChanger(commands.Cog):
                                                     additional="Please enter a role or multiple roles separated by commas below: (Times out in 300 seconds)",
                                                     callback=self.remove_allowable_roles, timeout=300)
 
+            toggle_custom_system_roles = reactMenu.Page(page_type="bool",
+                                                        name="Toggle Custom System Roles",
+                                                        body=f"Allows the members of your server to get a dedicated role just for their system that will be automatically linked whoever is frontings favorite color. This is not recommended for really large servers. Currently **{system_role}**",
+                                                        callback=self.toggle_custom_system_roles)
+
             menu = reactMenu.Menu(name="Auto Role Admin Settings",
                                   body="Please select an option below by sending a message with the number",
-                                  pages=[list_allowable_roles, add_allowable_roles, remove_allowable_roles])
+                                  pages=[list_allowable_roles, add_allowable_roles, remove_allowable_roles, toggle_custom_system_roles])
 
             await menu.run(self.ctx)
 
@@ -1315,6 +1420,19 @@ class AutoRoleChanger(commands.Cog):
                 embed.add_field(name="Could not find and remove the following (check spelling and capitalization):", value=bad_roles_msg)
 
             await ctx.send(embed=embed)
+
+        async def toggle_custom_system_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
+                              response: bool):
+
+            if response:
+                new_custom_role_setting = False if self.guild_settings.custom_roles else True
+                new_custom_role_setting_text = "Disabled" if self.guild_settings.custom_roles else "Enabled"
+
+                await db.update_custom_role_guild_setting(self.pool, ctx.guild.id, new_custom_role_setting)
+
+                await self.ctx.send(f"Custom System Roles for your servers members are now **{new_custom_role_setting_text}**")
+            else:
+                await self.ctx.send(f"Canceled!")
 
     @is_authorized_guild()
     @commands.guild_only()
