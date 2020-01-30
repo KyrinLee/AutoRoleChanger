@@ -8,7 +8,7 @@ import asyncio
 from typing import Optional, Dict
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import asyncpg
 
@@ -34,9 +34,10 @@ class PNBot(commands.Bot):
         self.error_log_channel_id: Optional[int] = None
         self.warning_log_channel_id: Optional[int] = None
         self.info_log_channel_id: Optional[int] = None
-
         self.dLog = dLogger(self)
         self.remove_command("help")  # Remove the built in help command so we can make the about section look nicer.
+
+        self.update_playing.start()
 
     def load_cogs(self):
         for extension in extensions:
@@ -54,8 +55,8 @@ class PNBot(commands.Bot):
         log.info('Username: {0.name}, ID: {0.id}'.format(self.user))
         log.info("Connected to {} servers.".format(len(self.guilds)))
 
-        activity = discord.Game("{}help".format(self.command_prefix))
-        await self.change_presence(status=discord.Status.online, activity=activity)
+        # activity = discord.Game("{}help".format(self.command_prefix))
+        # await self.change_presence(status=discord.Status.online, activity=activity)
         await self.dLog.initialize_logger(self.error_log_channel_id, self.warning_log_channel_id, self.info_log_channel_id)
 
     # ---- Command Error Handling ----- #
@@ -113,6 +114,24 @@ class PNBot(commands.Bot):
         log_msg = "Auto Role Changer joined **{} ({})**, owned by:** {} - {}#{} ({})**".format(guild.name, guild.id, guild.owner.display_name, guild.owner.name, guild.owner.discriminator, guild.owner.id)
         log.warning(log_msg)
         await self.dLog.warning(log_msg, header=f"[{__name__}]")
+
+
+    def cog_unload(self):
+        self.update_playing.cancel()
+
+
+    @tasks.loop(minutes=30)
+    async def update_playing(self):
+        log.info("Updating now Playing...")
+        await self.set_playing_status()
+
+    @update_playing.before_loop
+    async def before_update_playing(self):
+        await self.wait_until_ready()
+
+    async def set_playing_status(self):
+        activity = discord.Game("{}help | in {} Servers".format(self.command_prefix, len(self.guilds)))
+        await self.change_presence(status=discord.Status.online, activity=activity)
 
 
 class Utilities(commands.Cog):

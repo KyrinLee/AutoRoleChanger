@@ -1184,7 +1184,7 @@ class AutoRoleChanger(commands.Cog):
 
             if self.guild_settings is None or not self.guild_settings.custom_roles:
                 await ctx.send(f"Custom system roles have been disabled in this server and can not be enabled.")
-                await db.update_system_role(self.pool, self.system.pk_sid, None, False)
+                await db.update_system_role(self.pool, self.system.pk_sid, ctx.guild.id, None, False)
                 return
 
             if response:
@@ -1214,7 +1214,7 @@ class AutoRoleChanger(commands.Cog):
                                                         fronters_favorite_color=current_fronters_color)
 
                     # TODO: We are possibly updating the DB twice in the case a System role did not exist yet. FIX!
-                    await db.update_system_role(self.pool, self.system.pk_sid, system_role.id, True)
+                    await db.update_system_role(self.pool, self.system.pk_sid, ctx.guild.id, system_role.id, True)
 
                     # give the user the new role
                     author: discord.Member = ctx.author
@@ -1230,7 +1230,7 @@ class AutoRoleChanger(commands.Cog):
                         systems_role: discord.Role = guild.get_role(self.current_user_settings.system_role)
                         if systems_role is not None:
                             await systems_role.delete()
-                    await db.update_system_role(self.pool, self.system.pk_sid, None, system_role_toggle_enabled)
+                    await db.update_system_role(self.pool, self.system.pk_sid, guild.id, None, system_role_toggle_enabled)
 
                     embed.description = f"Your Custom System Role has been removed"
 
@@ -1526,8 +1526,11 @@ class AutoRoleChanger(commands.Cog):
         await ctx.send(msg)
 
     @commands.is_owner()
-    @commands.command(hidden=True)
-    async def debug_all_settings(self, ctx: commands.Context, discord_id: int):  # , guild_id: Optional[int]):
+    @commands.command(hidden=True, aliases=["d_as"])
+    async def debug_all_settings(self, ctx: commands.Context, discord_id: Optional[int] = None):  # , guild_id: Optional[int]):
+
+        if discord_id is None:
+            discord_id = ctx.author.id
 
         unfindable_guilds = []
         embed_entries = []
@@ -1536,44 +1539,82 @@ class AutoRoleChanger(commands.Cog):
         for settings_in_guild in all_user_settings:
             guild: Optional[discord.Guild] = self.bot.get_guild(settings_in_guild.guild_id)
             if guild is None:
-                unfindable_guilds.append(settings_in_guild.guild_id)
+                unfindable_guilds.append(str(settings_in_guild.guild_id))
                 continue
 
             auto_name = "On" if settings_in_guild.name_change else "Off"
             auto_role = "On" if settings_in_guild.role_change else "Off"
-            msg = f"For Guild: {guild.name} Auto name: {auto_name}, Auto Roles: {auto_role}"
-            embed_entries.append(msg)
+            sys_role_enabled = settings_in_guild.system_role_enabled
+            sys_role_id = settings_in_guild.system_role
+
+            sys_role = guild.get_role(sys_role_id) if sys_role_id is not None else None
+
+            header = f"Guild: {guild.name}"
+            if not sys_role_enabled:
+                sys_role_msg = "Off"
+            elif sys_role_enabled and sys_role_id is not None and sys_role is None:
+                sys_role_msg = f"On, but unresolvable: {sys_role_id}"
+            elif sys_role_enabled and sys_role_id is not None and sys_role is not None:
+                sys_role_msg = f"On: Name: {sys_role.name}, ID: {sys_role.id}, Pos: {sys_role.position}, Created: {sys_role.created_at.strftime('%Y-%m-%d, %H:%M:%S %z')}"
+            else:
+                sys_role_msg = f"Toggle: {sys_role_enabled}, DBID: {sys_role_id}, Role: {sys_role}"
+
+            msg = f"Auto name: {auto_name}\nAuto Roles: {auto_role}\nSystem Role: {sys_role_msg}"
+            embed_entries.append((header, msg))
+
+        if len(unfindable_guilds) > 0:
+            msg = ', '.join(unfindable_guilds)
+            embed_entries.append(("Unresolvable Guilds:", msg))
 
         page = FieldPages(ctx, entries=embed_entries, per_page=10)
         page.embed.title = f"User Settings Debug.:"
         await page.paginate()
 
-    # @commands.is_owner()
-    # @commands.command(hidden=True)
-    # async def debug_all_settings(self, ctx: commands.Context, discord_id: int):  # , guild_id: Optional[int]):
-    #
-    #     unfindable_guilds = []
-    #     embed_entries = []
-    #     all_user_settings = await db.get_all_user_settings_from_discord_id(self.pool, discord_id)
-    #
-    #     for settings_in_guild in all_user_settings:
-    #         guild: Optional[discord.Guild] = self.bot.get_guild(settings_in_guild.guild_id)
-    #         if guild is None:
-    #             unfindable_guilds.append(str(settings_in_guild.guild_id))
-    #             continue
-    #
-    #         auto_name = "On" if settings_in_guild.name_change else "Off"
-    #         auto_role = "On" if settings_in_guild.role_change else "Off"
-    #         msg = f"Auto Name: {auto_name}\nAuto Roles: {auto_role}"
-    #         embed_entries.append((f"Guild: {guild.name}", msg))
-    #
-    #     if len(unfindable_guilds) > 0:
-    #         msg = ', '.join(unfindable_guilds)
-    #         embed_entries.append((f"Unfindable Guilds:", msg))
-    #
-    #     page = FieldPages(ctx, entries=embed_entries, per_page=10)
-    #     page.embed.title = f"User Settings Debug:"
-    #     await page.paginate()
+
+    @commands.is_owner()
+    @commands.command(hidden=True, aliases=["d_ase"])
+    async def debug_all_settings_everyone(self, ctx: commands.Context):
+
+        unfindable_guilds = []
+        embed_entries = []
+        all_user_settings = await db.DEBUG_get_every_user_settings(self.pool)
+
+        for settings_in_guild in all_user_settings:
+            guild: Optional[discord.Guild] = self.bot.get_guild(settings_in_guild.guild_id)
+            if guild is None:
+                unfindable_guilds.append(str(settings_in_guild.guild_id))
+                continue
+
+            auto_name = "On" if settings_in_guild.name_change else "Off"
+            auto_role = "On" if settings_in_guild.role_change else "Off"
+            sys_role_enabled = settings_in_guild.system_role_enabled
+            sys_role_id = settings_in_guild.system_role
+
+            sys_role = guild.get_role(sys_role_id) if sys_role_id is not None else None
+
+            header = f"Guild: {guild.name}\nUser: {settings_in_guild.pk_sid}"
+            if not sys_role_enabled:
+                sys_role_msg = "Off"
+            elif sys_role_enabled and sys_role_id is not None and sys_role is None:
+                sys_role_msg = f"On, but unresolvable: {sys_role_id}"
+            elif sys_role_enabled and sys_role_id is not None and sys_role is not None:
+                sys_role_msg = f"On: Name: {sys_role.name}, ID: {sys_role.id}, Pos: {sys_role.position}, Created: {sys_role.created_at.strftime('%Y-%m-%d, %H:%M:%S %z')}"
+            else:
+                sys_role_msg = f"Toggle: {sys_role_enabled}, DBID: {sys_role_id}, Role: {sys_role}"
+
+            msg = f"Auto name: {auto_name}\nAuto Roles: {auto_role}\nSystem Role: {sys_role_msg}"
+            embed_entries.append((header, msg))
+
+        if len(unfindable_guilds) > 0:
+            msg = ', '.join(set(unfindable_guilds))
+            embed_entries.append(("Unresolvable Guilds:", msg))
+
+        page = FieldPages(ctx, entries=embed_entries, per_page=10)
+        page.embed.title = f"User Settings Debug.:"
+        await page.paginate()
+
+
+
 
     #
     # @commands.is_owner()
@@ -1649,14 +1690,15 @@ class AutoRoleChanger(commands.Cog):
 
     async def info(self, msg):
         """Info Logger"""
-        func = inspect.currentframe().f_back.f_code
-        log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
+        # func = inspect.currentframe().f_back.f_code
+        # log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
+        log.info(f"{msg}")
         # await self.bot.dLog.info(msg, header=f"[{__name__}]")
 
     async def warning(self, msg):
-        # log.warning(msg)
-        func = inspect.currentframe().f_back.f_code
-        log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
+        log.warning(msg)
+        # func = inspect.currentframe().f_back.f_code
+        # log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
         # await self.bot.dLog.warning(msg, header=f"[{__name__}]")
 
 

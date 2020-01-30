@@ -625,28 +625,28 @@ async def update_user_setting(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: in
 
 
 @db_deco
-async def update_system_role(pool: asyncpg.pool.Pool, pk_sid: str, system_role: Optional[int], enabled: bool):  # Not currently in use.
-    """For a future feature we will probably not implement"""
+async def update_system_role(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: int, system_role: Optional[int], enabled: bool):
+    """Updates the system role ID and the Enabled flag for a users settings on a guild."""
     async with pool.acquire() as conn:
         await conn.execute("""
                               UPDATE user_settings
                               SET system_role = $1, system_role_enabled = $2
-                              WHERE pk_sid = $3
-                            """, system_role, enabled, pk_sid)
+                              WHERE pk_sid = $3 AND guild_id = $4
+                            """, system_role, enabled, pk_sid, guild_id)
 
-
-@db_deco
-async def get_user_settings_for_guildby_pksid(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: int) -> Optional[UserSettings]:  # Not currently in use.
-    """ Gets the user settings for a system by using thier systemID and guildID.
-        While 'get_user_settings_from_discord_id' is currently being used instead of this function,
-            prehaps this function should get more use as it's lack of an INNER JOIN should make it more efficient."""
-    async with pool.acquire() as conn:
-        cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? AND guild_id = ? COLLATE NOCASE", (pk_sid, guild_id))
-        raw_row = await cursor.fetchone()
-        if raw_row is None:
-            return None
-        user_settings = UserSettings(raw_row)
-        return user_settings
+#
+# @db_deco
+# async def get_user_settings_for_guildby_pksid(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: int) -> Optional[UserSettings]:  # Not currently in use.
+#     """ Gets the user settings for a system by using thier systemID and guildID.
+#         While 'get_user_settings_from_discord_id' is currently being used instead of this function,
+#             prehaps this function should get more use as it's lack of an INNER JOIN should make it more efficient."""
+#     async with pool.acquire() as conn:
+#         cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? AND guild_id = ? COLLATE NOCASE", (pk_sid, guild_id))
+#         raw_row = await cursor.fetchone()
+#         if raw_row is None:
+#             return None
+#         user_settings = UserSettings(raw_row)
+#         return user_settings
 
 
 @db_deco
@@ -677,6 +677,21 @@ async def get_all_user_settings_from_discord_id(pool: asyncpg.pool.Pool, discord
                                     WHERE accounts.dis_uid = $1
                                     """, discord_user_id)
 
+        if len(raw_rows) == 0:
+            return None
+
+        all_user_settings = [UserSettings(row) for row in raw_rows]
+        return all_user_settings
+
+@db_deco
+async def DEBUG_get_every_user_settings(pool: asyncpg.pool.Pool) -> Optional[List[UserSettings]]:
+    """Not currently in use, will be useful for cros guild ARCing"""
+    async with pool.acquire() as conn:
+        # cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? COLLATE NOCASE", (pk_sid, ))
+        raw_rows = await conn.fetch("""
+                                    SELECT *
+                                    from user_settings
+                                    """)
         if len(raw_rows) == 0:
             return None
 
