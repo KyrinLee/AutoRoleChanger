@@ -285,7 +285,6 @@ class AutoRoleChanger(commands.Cog):
         guild_id: int
         roles: List[discord.Object]
 
-
     async def get_new_roles(self, fronters: pk.Fronters, guild_id: int) -> Optional[UserRoles]:
 
         if fronters is None:
@@ -311,7 +310,6 @@ class AutoRoleChanger(commands.Cog):
     #         roles_for_all_guilds = await db.get_roles_for_member(self.pool, fronter.hid)
     #
     #         for role
-
 
     async def autochange_discord_user_across_discord(self, discord_member: Union[discord.Member, discord.User],
                                                      pk_system_id: str, updated_fronters: Optional[pk.Fronters]):
@@ -397,8 +395,6 @@ class AutoRoleChanger(commands.Cog):
                         await current_discord_user.edit(nick=new_name)
                     except discord.errors.Forbidden:
                         await self.info(f"Forbidden! Could not change {discord_member.display_name}'s name")
-
-
 
     async def autochange_discord_user(self, discord_member: Union[discord.Member, discord.User], pk_system_id: str, new_roles: List[Union[discord.Role, discord.Object]], updated_fronters: Optional[pk.Fronters]):
         """Applies the new roles and name to the selected discord user"""
@@ -560,7 +556,6 @@ class AutoRoleChanger(commands.Cog):
 
         await ctx.send(embed=embed)
 
-
     # ----- Permission Debug Commands ----- #
     @commands.guild_only()
     @commands.command(name="permcheck", aliases=["permissions", "perm"], brief="Debug ARCs permission settings.",
@@ -666,7 +661,6 @@ class AutoRoleChanger(commands.Cog):
                                f"If your name and/or roles did not update in other guilds, please try again in a minute.")
             else:
                 await msg.edit(content="System updated! If your roles and/or name did not update, please try again in a minute.")
-
 
     # @is_authorized_guild()
     @commands.guild_only()
@@ -869,7 +863,6 @@ class AutoRoleChanger(commands.Cog):
                                              callback=self.remove_role_cont)
             await ask_to_remove_more.run(client, ctx)
 
-
         async def remove_role_cont(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                    response: bool):
             if response:
@@ -946,7 +939,6 @@ class AutoRoleChanger(commands.Cog):
             embed = arcEmbeds.allowable_roles_embed(self.allowable_roles)
             await ctx.send(embed=embed)
             await self.ask_to_go_back()
-
 
         async def add_role_to_all_members(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                           response: discord.Message):
@@ -1030,7 +1022,6 @@ class AutoRoleChanger(commands.Cog):
                                            timeout=300)
                 await add_roles.run(self.bot, ctx)
 
-
         # async def select_members_for_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context, response: discord.Message):
         #
         #     #
@@ -1050,7 +1041,6 @@ class AutoRoleChanger(commands.Cog):
         #                                    callback=self.add_role,
         #                                    timeout=300)
         #         await add_roles.run(self.bot, ctx)
-
 
         async def add_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                            response: discord.Message):
@@ -1089,7 +1079,6 @@ class AutoRoleChanger(commands.Cog):
             else:
                 # await ctx.send("Finished adding roles!")
                 await self.ask_to_go_back()
-
 
     @is_authorized_guild()
     @commands.guild_only()
@@ -1138,6 +1127,7 @@ class AutoRoleChanger(commands.Cog):
 
             auto_name = "On" if self.current_user_settings.name_change else "Off"
             auto_role = "On" if self.current_user_settings.role_change else "Off"
+            system_role = "On" if self.current_user_settings.system_role_enabled else "Off"
 
             name_change = reactMenu.Page("bool", name="Toggle Auto Name Change",
                                          body=f"Toggles the automatic name change functionality. Currently **{auto_name}**",
@@ -1237,7 +1227,7 @@ class AutoRoleChanger(commands.Cog):
                     guild: discord.Guild = ctx.guild
 
                     if self.current_user_settings.system_role is not None:
-                        systems_role: discord.Role = await guild.get_role(self.current_user_settings.system_role)
+                        systems_role: discord.Role = guild.get_role(self.current_user_settings.system_role)
                         if systems_role is not None:
                             await systems_role.delete()
                     await db.update_system_role(self.pool, self.system.pk_sid, None, system_role_toggle_enabled)
@@ -1247,7 +1237,6 @@ class AutoRoleChanger(commands.Cog):
                 await self.ctx.send(embed=embed)
             else:
                 await self.ctx.send(f"Canceled!")
-
 
     @is_authorized_guild()
     @commands.has_permissions(manage_messages=True)
@@ -1453,7 +1442,6 @@ class AutoRoleChanger(commands.Cog):
 
         # await self.getting_started(ctx)
 
-
     async def prompt_for_pk_token(self, ctx: commands.Context):
         author: discord.Member = ctx.author
 
@@ -1503,7 +1491,6 @@ class AutoRoleChanger(commands.Cog):
         }
         return pk_info
 
-
     @is_authorized_guild()
     @commands.guild_only()
     @commands.command(name="unregister", aliases=["unreg"],
@@ -1538,7 +1525,6 @@ class AutoRoleChanger(commands.Cog):
         msg = f"Auto name: {auto_name}, Auto Roles: {auto_role}"
         await ctx.send(msg)
 
-
     @commands.is_owner()
     @commands.command(hidden=True)
     async def debug_all_settings(self, ctx: commands.Context, discord_id: int):  # , guild_id: Optional[int]):
@@ -1561,7 +1547,6 @@ class AutoRoleChanger(commands.Cog):
         page = FieldPages(ctx, entries=embed_entries, per_page=10)
         page.embed.title = f"User Settings Debug.:"
         await page.paginate()
-
 
     # @commands.is_owner()
     # @commands.command(hidden=True)

@@ -164,8 +164,6 @@ class Page:
         await self.remove()
         await self.callback(self, client, ctx)
 
-
-
     async def remove(self, user: bool = True, page: bool = True):
 
         if self.previous is not None:
