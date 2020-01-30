@@ -224,6 +224,22 @@ class AutoRoleChanger(commands.Cog):
             await db.update_member(self.pool, system_id, update_member.hid, update_member.name, fronting=fronting)
         await self.info(f"Updated members for {discord_member.name}")
 
+        # TODO: The below code May be broken and 'fake updating' members when it should not. Fix.
+        # Clean up the DB and remove and remove any members that no longer exist (or are private at this point)
+        # We are going to go off the stale_member data as this doesn't need to happen EVERY time.
+        if stale_members is not None:
+            for stale_member in stale_members:
+                found = False
+                for updated_member in updated_members:
+                    if stale_member['pk_mid'] == updated_member.hid:
+                        found = True
+                        break
+                if not found:
+                    # await self.warning(f"DELETING member in {discord_member.name}'s system: {stale_member}")
+                    # await db.delete_member(self.pool, stale_member['pk_sid'], stale_member['pk_mid'])
+                    await self.warning(f"Non-updating Stale member in {discord_member.name}'s system: {stale_member}. Pushing next update forward 24H")
+                    await db.fake_member_update(self.pool, stale_member['pk_mid'])
+
         # TODO: The below code seems to be broken and deletes members when it should not. Fix.
         # Clean up the DB and remove and remove any members that no longer exist (or are private at this point)
         # We are going to go off the stale_member data as this doesn't need to happen EVERY time.
@@ -814,7 +830,7 @@ class AutoRoleChanger(commands.Cog):
                                                     response: bool):
             if response:
                 remove_another_role = reactMenu.Page("str", name="Remove another role",
-                                                     body="Please enter a role.",
+                                                     body="Please enter a role or multiple roles separated by commas below:",
                                                      callback=self.remove_role_from_all_members)
                 await remove_another_role.run(client, ctx)
             else:
@@ -867,7 +883,7 @@ class AutoRoleChanger(commands.Cog):
                                    response: bool):
             if response:
                 remove_another_role = reactMenu.Page("str", name="Remove another role",
-                                                  body="Please enter a role.",
+                                                  body="Please enter a role or multiple roles separated by commas below:",
                                                   callback=self.remove_role)
                 await remove_another_role.run(client, ctx)
             else:
@@ -976,7 +992,7 @@ class AutoRoleChanger(commands.Cog):
             # await page.remove()
             if response:
                 add_another_role = reactMenu.Page("str", name="Add another role",
-                                                  body="Please enter a role.",
+                                                  body="Please enter a role or multiple roles separated by commas below:",
                                                   callback=self.add_role_to_all_members)
                 await add_another_role.run(client, ctx)
             else:
@@ -1073,7 +1089,7 @@ class AutoRoleChanger(commands.Cog):
                                             response: bool):
             if response:
                 add_another_role = reactMenu.Page("str", name="Add another role",
-                                                  body="Please enter a role.",
+                                                  body="Please enter a role or multiple roles separated by commas below:",
                                                   callback=self.add_role)
                 await add_another_role.run(client, ctx)
             else:
@@ -1699,7 +1715,7 @@ class AutoRoleChanger(commands.Cog):
         log.warning(msg)
         # func = inspect.currentframe().f_back.f_code
         # log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
-        # await self.bot.dLog.warning(msg, header=f"[{__name__}]")
+        await self.bot.dLog.warning(msg, header=f"[{__name__}]")
 
 
 def setup(bot):

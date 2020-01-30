@@ -48,8 +48,8 @@ async def create_db_pool(uri: str) -> asyncpg.pool.Pool:
 
     return pool
 
-async def test():
-    return DBGuildSettings(guild_id=1)
+# async def test():
+#     return DBGuildSettings(guild_id=1)
 
 
 # --- System DB Functions --- #
@@ -246,13 +246,13 @@ async def fake_member_update(pool: asyncpg.pool.Pool, pk_mid: str):
     """This just updates the last_update time to 24 hours in the future as a temporary work around for PK Privacy issues."""
     pk_mid = pk_mid.lower()  # Just to be sure...
     async with pool.acquire() as conn:
-        conn: asyncpg.connection.Connection
+        # conn: asyncpg.connection.Connection
         # Convert ts to int
         update_ts: datetime = datetime.utcnow().timestamp() + 60*60*24
-    await conn.execute(
-        """UPDATE members
-           SET last_update = $1
-           WHERE pk_mid = $2""", update_ts, pk_mid)
+        await conn.execute(
+            """UPDATE members
+               SET last_update = $1
+               WHERE pk_mid = $2""", update_ts, pk_mid)
 
 
 # --- Get Member(s) --- #
@@ -501,9 +501,20 @@ class AllowableRoles:
     # roles: Optional[List[discord.Role]]
     row_map = ['role_id', 'guild_id']
 
-    def __init__(self, rows: Iterable[aiosqlite.Row]):
-        self.guild_id: int = rows[0][1]  # Guild ID will be the same for every role, so just set it from the first
-        self.role_ids = [row[0] for row in rows]
+    def __init__(self, guild_id: int, role_ids: List[int]): #rows: Iterable[aiosqlite.Row]):
+
+        self.guild_id: int = guild_id  # Guild ID will be the same for every role, so just set it from the first
+        self.role_ids = role_ids
+
+    @classmethod
+    def from_list_of_dict(cls, rows: Iterable[aiosqlite.Row]):
+
+        obj = cls(rows[0][1], [row[0] for row in rows])
+        return obj
+
+
+    # self.guild_id: int = rows[0][1]  # Guild ID will be the same for every role, so just set it from the first
+    # self.role_ids = [row[0] for row in rows]
 
     def is_allowed(self, other_role: discord.Role):
         for allowed_role_id in self.role_ids:
@@ -559,13 +570,13 @@ async def add_allowable_role(pool: asyncpg.pool.Pool, guild_id: int, role_id: in
 
 
 @db_deco
-async def get_allowable_roles(pool: asyncpg.pool.Pool, guild_id: int) -> Optional[AllowableRoles]:
+async def get_allowable_roles(pool: asyncpg.pool.Pool, guild_id: int) -> AllowableRoles:
     async with pool.acquire() as conn:
         raw_rows = await conn.fetch(" SELECT * from allowable_roles where guild_id = $1", guild_id)
 
         if len(raw_rows) == 0:
-            return None
-        allowable_roles = AllowableRoles(raw_rows)
+            return AllowableRoles(guild_id=guild_id, role_ids=[])
+        allowable_roles = AllowableRoles.from_list_of_dict(raw_rows)
         return allowable_roles
 
 
