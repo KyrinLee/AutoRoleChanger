@@ -5,9 +5,12 @@ import functools
 from datetime import datetime
 from typing import Optional, List, Dict, Iterable, Union, NamedTuple
 
+from collections import defaultdict
+
 import aiosqlite
 import sqlite3
 
+import statistics as stats
 import asyncpg
 
 import discord
@@ -16,6 +19,59 @@ import cogs.utils.pluralKit as pk
 
 log = logging.getLogger("ARC.pDB")
 
+
+class DBPerformance:
+
+    def __init__(self):
+        self.time = defaultdict(list)
+
+
+    def avg(self, key: str):
+        return stats.mean(self.time[key])
+
+
+    def all_avg(self):
+        avgs = {}
+        for key, value in self.time.items():
+            avgs[key] = stats.mean(value)
+        return avgs
+
+    def stats(self):
+        statistics = {}
+        for key, value in self.time.items():
+            loop_stats = {}
+            try:
+                loop_stats['avg'] = stats.mean(value)
+            except stats.StatisticsError:
+                loop_stats['avg'] = -1
+
+            try:
+                loop_stats['max'] = max(value)
+            except stats.StatisticsError:
+                loop_stats['max'] = -1
+
+            try:
+                loop_stats['min'] = min(value)
+            except stats.StatisticsError:
+                loop_stats['min'] = -1
+
+            try:
+                loop_stats['med'] = stats.median(value)
+            except stats.StatisticsError:
+                loop_stats['med'] = -1
+
+            try:
+                loop_stats['mod'] = stats.mode(value)
+            except stats.StatisticsError:
+                loop_stats['mod'] = -1
+
+            loop_stats['calls'] = len(value)
+
+            statistics[key] = loop_stats
+        return statistics
+
+
+db_perf = DBPerformance()
 
 
 # --- Utility DB Functions --- #
@@ -26,10 +82,14 @@ def db_deco(func):
         try:
             response = await func(*args, **kwargs)
             end_time = time.perf_counter()
+
+            # db_performance[func.__name__].append((end_time - start_time))
+            db_perf.time[func.__name__].append((end_time - start_time) * 1000)
+
             if len(args) > 1:
-                log.info("DB Query {} from {} in {:.3f} ms.".format(func.__name__, args[1], (end_time - start_time) * 1000))
+                log.debug("DB Query {} from {} in {:.3f} ms.".format(func.__name__, args[1], (end_time - start_time) * 1000))
             else:
-                log.info("DB Query {} in {:.3f} ms.".format(func.__name__, (end_time - start_time) * 1000))
+                log.debug("DB Query {} in {:.3f} ms.".format(func.__name__, (end_time - start_time) * 1000))
             return response
         # except Exception:
         except asyncpg.exceptions.PostgresError:
@@ -38,6 +98,10 @@ def db_deco(func):
             else:
                 log.exception("Error attempting database query: {}".format(func.__name__))
     return wrapper
+
+
+def get_db_perf():
+    return db_perf
 
 
 async def create_db_pool(uri: str) -> asyncpg.pool.Pool:
@@ -764,8 +828,6 @@ async def get_guild_settings(pool: asyncpg.pool.Pool, guild_id: int):# -> Option
             return None
 
         return raw_row
-
-
 
 
 # ---------- Table Migration ---------- #

@@ -1525,6 +1525,31 @@ class AutoRoleChanger(commands.Cog):
         await ctx.send("Deletion Canceled!")
 
 
+    @commands.command(hidden=True, aliases=["db_stats"])
+    async def db_statistics(self, ctx: commands.Context):
+
+        embed_entries = []
+
+        stats = db.db_perf.stats()
+
+        embed = discord.Embed(title="Statistics:")
+        for key, value in stats.items():
+            if key != 'create_tables' and key != 'migrate_to_latest':
+                header = f"{key}"
+
+                msg_list = []
+                for sub_key, sub_value in value.items():
+                    msg_list.append(f"{sub_key}: {sub_value:.2f}")
+
+                if len(msg_list) > 0:
+                    msg = "\n".join(msg_list)
+                    embed_entries.append((header, msg))
+
+        page = FieldPages(ctx, entries=embed_entries, per_page=10)
+        page.embed.title = f"DB Statistics:"
+        await page.paginate()
+
+
     @commands.is_owner()
     @commands.command(hidden=True)
     async def debug_settings(self, ctx: commands.Context, member_id: int):  # , guild_id: Optional[int]):
