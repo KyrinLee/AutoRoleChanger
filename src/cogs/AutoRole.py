@@ -1183,7 +1183,6 @@ class AutoRoleChanger(commands.Cog):
             self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
 
             if self.guild_settings is None or not self.guild_settings.custom_roles:
-                await ctx.send(f"Custom system roles have been disabled in this server and can not be enabled.")
                 await db.update_system_role(self.pool, self.system.pk_sid, None, False)
                 return
 
