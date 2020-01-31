@@ -5,9 +5,12 @@ import functools
 from datetime import datetime
 from typing import Optional, List, Dict, Iterable, Union, NamedTuple
 
+from collections import defaultdict
+
 import aiosqlite
 import sqlite3
 
+import statistics as stats
 import asyncpg
 
 import discord
@@ -16,6 +19,59 @@ import cogs.utils.pluralKit as pk
 
 log = logging.getLogger("ARC.pDB")
 
+
+class DBPerformance:
+
+    def __init__(self):
+        self.time = defaultdict(list)
+
+
+    def avg(self, key: str):
+        return stats.mean(self.time[key])
+
+
+    def all_avg(self):
+        avgs = {}
+        for key, value in self.time.items():
+            avgs[key] = stats.mean(value)
+        return avgs
+
+    def stats(self):
+        statistics = {}
+        for key, value in self.time.items():
+            loop_stats = {}
+            try:
+                loop_stats['avg'] = stats.mean(value)
+            except stats.StatisticsError:
+                loop_stats['avg'] = -1
+
+            try:
+                loop_stats['max'] = max(value)
+            except stats.StatisticsError:
+                loop_stats['max'] = -1
+
+            try:
+                loop_stats['min'] = min(value)
+            except stats.StatisticsError:
+                loop_stats['min'] = -1
+
+            try:
+                loop_stats['med'] = stats.median(value)
+            except stats.StatisticsError:
+                loop_stats['med'] = -1
+
+            try:
+                loop_stats['mod'] = stats.mode(value)
+            except stats.StatisticsError:
+                loop_stats['mod'] = -1
+
+            loop_stats['calls'] = len(value)
+
+            statistics[key] = loop_stats
+        return statistics
+
+
+db_perf = DBPerformance()
 
 
 # --- Utility DB Functions --- #
@@ -26,10 +82,14 @@ def db_deco(func):
         try:
             response = await func(*args, **kwargs)
             end_time = time.perf_counter()
+
+            # db_performance[func.__name__].append((end_time - start_time))
+            db_perf.time[func.__name__].append((end_time - start_time) * 1000)
+
             if len(args) > 1:
-                log.info("DB Query {} from {} in {:.3f} ms.".format(func.__name__, args[1], (end_time - start_time) * 1000))
+                log.debug("DB Query {} from {} in {:.3f} ms.".format(func.__name__, args[1], (end_time - start_time) * 1000))
             else:
-                log.info("DB Query {} in {:.3f} ms.".format(func.__name__, (end_time - start_time) * 1000))
+                log.debug("DB Query {} in {:.3f} ms.".format(func.__name__, (end_time - start_time) * 1000))
             return response
         # except Exception:
         except asyncpg.exceptions.PostgresError:
@@ -40,6 +100,10 @@ def db_deco(func):
     return wrapper
 
 
+def get_db_perf():
+    return db_perf
+
+
 async def create_db_pool(uri: str) -> asyncpg.pool.Pool:
 
     # FIXME: Error Handling
@@ -48,8 +112,8 @@ async def create_db_pool(uri: str) -> asyncpg.pool.Pool:
 
     return pool
 
-async def test():
-    return DBGuildSettings(guild_id=1)
+# async def test():
+#     return DBGuildSettings(guild_id=1)
 
 
 # --- System DB Functions --- #
@@ -246,13 +310,13 @@ async def fake_member_update(pool: asyncpg.pool.Pool, pk_mid: str):
     """This just updates the last_update time to 24 hours in the future as a temporary work around for PK Privacy issues."""
     pk_mid = pk_mid.lower()  # Just to be sure...
     async with pool.acquire() as conn:
-        conn: asyncpg.connection.Connection
+        # conn: asyncpg.connection.Connection
         # Convert ts to int
         update_ts: datetime = datetime.utcnow().timestamp() + 60*60*24
-    await conn.execute(
-        """UPDATE members
-           SET last_update = $1
-           WHERE pk_mid = $2""", update_ts, pk_mid)
+        await conn.execute(
+            """UPDATE members
+               SET last_update = $1
+               WHERE pk_mid = $2""", update_ts, pk_mid)
 
 
 # --- Get Member(s) --- #
@@ -501,9 +565,20 @@ class AllowableRoles:
     # roles: Optional[List[discord.Role]]
     row_map = ['role_id', 'guild_id']
 
-    def __init__(self, rows: Iterable[aiosqlite.Row]):
-        self.guild_id: int = rows[0][1]  # Guild ID will be the same for every role, so just set it from the first
-        self.role_ids = [row[0] for row in rows]
+    def __init__(self, guild_id: int, role_ids: List[int]): #rows: Iterable[aiosqlite.Row]):
+
+        self.guild_id: int = guild_id  # Guild ID will be the same for every role, so just set it from the first
+        self.role_ids = role_ids
+
+    @classmethod
+    def from_list_of_dict(cls, rows: Iterable[aiosqlite.Row]):
+
+        obj = cls(rows[0][1], [row[0] for row in rows])
+        return obj
+
+
+    # self.guild_id: int = rows[0][1]  # Guild ID will be the same for every role, so just set it from the first
+    # self.role_ids = [row[0] for row in rows]
 
     def is_allowed(self, other_role: discord.Role):
         for allowed_role_id in self.role_ids:
@@ -559,13 +634,13 @@ async def add_allowable_role(pool: asyncpg.pool.Pool, guild_id: int, role_id: in
 
 
 @db_deco
-async def get_allowable_roles(pool: asyncpg.pool.Pool, guild_id: int) -> Optional[AllowableRoles]:
+async def get_allowable_roles(pool: asyncpg.pool.Pool, guild_id: int) -> AllowableRoles:
     async with pool.acquire() as conn:
         raw_rows = await conn.fetch(" SELECT * from allowable_roles where guild_id = $1", guild_id)
 
         if len(raw_rows) == 0:
-            return None
-        allowable_roles = AllowableRoles(raw_rows)
+            return AllowableRoles(guild_id=guild_id, role_ids=[])
+        allowable_roles = AllowableRoles.from_list_of_dict(raw_rows)
         return allowable_roles
 
 
@@ -625,28 +700,28 @@ async def update_user_setting(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: in
 
 
 @db_deco
-async def update_system_role(pool: asyncpg.pool.Pool, pk_sid: str, system_role: Optional[int], enabled: bool):  # Not currently in use.
-    """For a future feature we will probably not implement"""
+async def update_system_role(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: int, system_role: Optional[int], enabled: bool):
+    """Updates the system role ID and the Enabled flag for a users settings on a guild."""
     async with pool.acquire() as conn:
         await conn.execute("""
                               UPDATE user_settings
                               SET system_role = $1, system_role_enabled = $2
-                              WHERE pk_sid = $3
-                            """, system_role, enabled, pk_sid)
+                              WHERE pk_sid = $3 AND guild_id = $4
+                            """, system_role, enabled, pk_sid, guild_id)
 
-
-@db_deco
-async def get_user_settings_for_guildby_pksid(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: int) -> Optional[UserSettings]:  # Not currently in use.
-    """ Gets the user settings for a system by using thier systemID and guildID.
-        While 'get_user_settings_from_discord_id' is currently being used instead of this function,
-            prehaps this function should get more use as it's lack of an INNER JOIN should make it more efficient."""
-    async with pool.acquire() as conn:
-        cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? AND guild_id = ? COLLATE NOCASE", (pk_sid, guild_id))
-        raw_row = await cursor.fetchone()
-        if raw_row is None:
-            return None
-        user_settings = UserSettings(raw_row)
-        return user_settings
+#
+# @db_deco
+# async def get_user_settings_for_guildby_pksid(pool: asyncpg.pool.Pool, pk_sid: str, guild_id: int) -> Optional[UserSettings]:  # Not currently in use.
+#     """ Gets the user settings for a system by using thier systemID and guildID.
+#         While 'get_user_settings_from_discord_id' is currently being used instead of this function,
+#             prehaps this function should get more use as it's lack of an INNER JOIN should make it more efficient."""
+#     async with pool.acquire() as conn:
+#         cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? AND guild_id = ? COLLATE NOCASE", (pk_sid, guild_id))
+#         raw_row = await cursor.fetchone()
+#         if raw_row is None:
+#             return None
+#         user_settings = UserSettings(raw_row)
+#         return user_settings
 
 
 @db_deco
@@ -677,6 +752,21 @@ async def get_all_user_settings_from_discord_id(pool: asyncpg.pool.Pool, discord
                                     WHERE accounts.dis_uid = $1
                                     """, discord_user_id)
 
+        if len(raw_rows) == 0:
+            return None
+
+        all_user_settings = [UserSettings(row) for row in raw_rows]
+        return all_user_settings
+
+@db_deco
+async def DEBUG_get_every_user_settings(pool: asyncpg.pool.Pool) -> Optional[List[UserSettings]]:
+    """Not currently in use, will be useful for cros guild ARCing"""
+    async with pool.acquire() as conn:
+        # cursor = await conn.execute(" SELECT * from user_settings where pk_sid = ? COLLATE NOCASE", (pk_sid, ))
+        raw_rows = await conn.fetch("""
+                                    SELECT *
+                                    from user_settings
+                                    """)
         if len(raw_rows) == 0:
             return None
 
@@ -738,8 +828,6 @@ async def get_guild_settings(pool: asyncpg.pool.Pool, guild_id: int):# -> Option
             return None
 
         return raw_row
-
-
 
 
 # ---------- Table Migration ---------- #

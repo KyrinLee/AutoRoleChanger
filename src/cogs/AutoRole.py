@@ -224,6 +224,22 @@ class AutoRoleChanger(commands.Cog):
             await db.update_member(self.pool, system_id, update_member.hid, update_member.name, fronting=fronting)
         await self.info(f"Updated members for {discord_member.name}")
 
+        # TODO: The below code May be broken and 'fake updating' members when it should not. Fix.
+        # Clean up the DB and remove and remove any members that no longer exist (or are private at this point)
+        # We are going to go off the stale_member data as this doesn't need to happen EVERY time.
+        if stale_members is not None:
+            for stale_member in stale_members:
+                found = False
+                for updated_member in updated_members:
+                    if stale_member['pk_mid'] == updated_member.hid:
+                        found = True
+                        break
+                if not found:
+                    # await self.warning(f"DELETING member in {discord_member.name}'s system: {stale_member}")
+                    # await db.delete_member(self.pool, stale_member['pk_sid'], stale_member['pk_mid'])
+                    await self.warning(f"Non-updating Stale member in {discord_member.name}'s system: {stale_member}. Pushing next update forward 24H")
+                    await db.fake_member_update(self.pool, stale_member['pk_mid'])
+
         # TODO: The below code seems to be broken and deletes members when it should not. Fix.
         # Clean up the DB and remove and remove any members that no longer exist (or are private at this point)
         # We are going to go off the stale_member data as this doesn't need to happen EVERY time.
@@ -814,7 +830,7 @@ class AutoRoleChanger(commands.Cog):
                                                     response: bool):
             if response:
                 remove_another_role = reactMenu.Page("str", name="Remove another role",
-                                                     body="Please enter a role.",
+                                                     body="Please enter a role or multiple roles separated by commas below:",
                                                      callback=self.remove_role_from_all_members)
                 await remove_another_role.run(client, ctx)
             else:
@@ -867,7 +883,7 @@ class AutoRoleChanger(commands.Cog):
                                    response: bool):
             if response:
                 remove_another_role = reactMenu.Page("str", name="Remove another role",
-                                                  body="Please enter a role.",
+                                                  body="Please enter a role or multiple roles separated by commas below:",
                                                   callback=self.remove_role)
                 await remove_another_role.run(client, ctx)
             else:
@@ -976,7 +992,7 @@ class AutoRoleChanger(commands.Cog):
             # await page.remove()
             if response:
                 add_another_role = reactMenu.Page("str", name="Add another role",
-                                                  body="Please enter a role.",
+                                                  body="Please enter a role or multiple roles separated by commas below:",
                                                   callback=self.add_role_to_all_members)
                 await add_another_role.run(client, ctx)
             else:
@@ -1073,7 +1089,7 @@ class AutoRoleChanger(commands.Cog):
                                             response: bool):
             if response:
                 add_another_role = reactMenu.Page("str", name="Add another role",
-                                                  body="Please enter a role.",
+                                                  body="Please enter a role or multiple roles separated by commas below:",
                                                   callback=self.add_role)
                 await add_another_role.run(client, ctx)
             else:
@@ -1214,7 +1230,7 @@ class AutoRoleChanger(commands.Cog):
                                                         fronters_favorite_color=current_fronters_color)
 
                     # TODO: We are possibly updating the DB twice in the case a System role did not exist yet. FIX!
-                    await db.update_system_role(self.pool, self.system.pk_sid, system_role.id, True)
+                    await db.update_system_role(self.pool, self.system.pk_sid, ctx.guild.id, system_role.id, True)
 
                     # give the user the new role
                     author: discord.Member = ctx.author
@@ -1230,7 +1246,7 @@ class AutoRoleChanger(commands.Cog):
                         systems_role: discord.Role = guild.get_role(self.current_user_settings.system_role)
                         if systems_role is not None:
                             await systems_role.delete()
-                    await db.update_system_role(self.pool, self.system.pk_sid, None, system_role_toggle_enabled)
+                    await db.update_system_role(self.pool, self.system.pk_sid, guild.id, None, system_role_toggle_enabled)
 
                     embed.description = f"Your Custom System Role has been removed"
 
@@ -1509,6 +1525,31 @@ class AutoRoleChanger(commands.Cog):
         await ctx.send("Deletion Canceled!")
 
 
+    @commands.command(hidden=True, aliases=["db_stats"])
+    async def db_statistics(self, ctx: commands.Context):
+
+        embed_entries = []
+
+        stats = db.db_perf.stats()
+
+        embed = discord.Embed(title="Statistics:")
+        for key, value in stats.items():
+            if key != 'create_tables' and key != 'migrate_to_latest':
+                header = f"{key}"
+
+                msg_list = []
+                for sub_key, sub_value in value.items():
+                    msg_list.append(f"{sub_key}: {sub_value:.2f}")
+
+                if len(msg_list) > 0:
+                    msg = "\n".join(msg_list)
+                    embed_entries.append((header, msg))
+
+        page = FieldPages(ctx, entries=embed_entries, per_page=10)
+        page.embed.title = f"DB Statistics:"
+        await page.paginate()
+
+
     @commands.is_owner()
     @commands.command(hidden=True)
     async def debug_settings(self, ctx: commands.Context, member_id: int):  # , guild_id: Optional[int]):
@@ -1526,8 +1567,11 @@ class AutoRoleChanger(commands.Cog):
         await ctx.send(msg)
 
     @commands.is_owner()
-    @commands.command(hidden=True)
-    async def debug_all_settings(self, ctx: commands.Context, discord_id: int):  # , guild_id: Optional[int]):
+    @commands.command(hidden=True, aliases=["d_as"])
+    async def debug_all_settings(self, ctx: commands.Context, discord_id: Optional[int] = None):  # , guild_id: Optional[int]):
+
+        if discord_id is None:
+            discord_id = ctx.author.id
 
         unfindable_guilds = []
         embed_entries = []
@@ -1536,44 +1580,82 @@ class AutoRoleChanger(commands.Cog):
         for settings_in_guild in all_user_settings:
             guild: Optional[discord.Guild] = self.bot.get_guild(settings_in_guild.guild_id)
             if guild is None:
-                unfindable_guilds.append(settings_in_guild.guild_id)
+                unfindable_guilds.append(str(settings_in_guild.guild_id))
                 continue
 
             auto_name = "On" if settings_in_guild.name_change else "Off"
             auto_role = "On" if settings_in_guild.role_change else "Off"
-            msg = f"For Guild: {guild.name} Auto name: {auto_name}, Auto Roles: {auto_role}"
-            embed_entries.append(msg)
+            sys_role_enabled = settings_in_guild.system_role_enabled
+            sys_role_id = settings_in_guild.system_role
+
+            sys_role = guild.get_role(sys_role_id) if sys_role_id is not None else None
+
+            header = f"Guild: {guild.name}"
+            if not sys_role_enabled:
+                sys_role_msg = "Off"
+            elif sys_role_enabled and sys_role_id is not None and sys_role is None:
+                sys_role_msg = f"On, but unresolvable: {sys_role_id}"
+            elif sys_role_enabled and sys_role_id is not None and sys_role is not None:
+                sys_role_msg = f"On: Name: {sys_role.name}, ID: {sys_role.id}, Pos: {sys_role.position}, Created: {sys_role.created_at.strftime('%Y-%m-%d, %H:%M:%S %z')}"
+            else:
+                sys_role_msg = f"Toggle: {sys_role_enabled}, DBID: {sys_role_id}, Role: {sys_role}"
+
+            msg = f"Auto name: {auto_name}\nAuto Roles: {auto_role}\nSystem Role: {sys_role_msg}"
+            embed_entries.append((header, msg))
+
+        if len(unfindable_guilds) > 0:
+            msg = ', '.join(unfindable_guilds)
+            embed_entries.append(("Unresolvable Guilds:", msg))
 
         page = FieldPages(ctx, entries=embed_entries, per_page=10)
         page.embed.title = f"User Settings Debug.:"
         await page.paginate()
 
-    # @commands.is_owner()
-    # @commands.command(hidden=True)
-    # async def debug_all_settings(self, ctx: commands.Context, discord_id: int):  # , guild_id: Optional[int]):
-    #
-    #     unfindable_guilds = []
-    #     embed_entries = []
-    #     all_user_settings = await db.get_all_user_settings_from_discord_id(self.pool, discord_id)
-    #
-    #     for settings_in_guild in all_user_settings:
-    #         guild: Optional[discord.Guild] = self.bot.get_guild(settings_in_guild.guild_id)
-    #         if guild is None:
-    #             unfindable_guilds.append(str(settings_in_guild.guild_id))
-    #             continue
-    #
-    #         auto_name = "On" if settings_in_guild.name_change else "Off"
-    #         auto_role = "On" if settings_in_guild.role_change else "Off"
-    #         msg = f"Auto Name: {auto_name}\nAuto Roles: {auto_role}"
-    #         embed_entries.append((f"Guild: {guild.name}", msg))
-    #
-    #     if len(unfindable_guilds) > 0:
-    #         msg = ', '.join(unfindable_guilds)
-    #         embed_entries.append((f"Unfindable Guilds:", msg))
-    #
-    #     page = FieldPages(ctx, entries=embed_entries, per_page=10)
-    #     page.embed.title = f"User Settings Debug:"
-    #     await page.paginate()
+
+    @commands.is_owner()
+    @commands.command(hidden=True, aliases=["d_ase"])
+    async def debug_all_settings_everyone(self, ctx: commands.Context):
+
+        unfindable_guilds = []
+        embed_entries = []
+        all_user_settings = await db.DEBUG_get_every_user_settings(self.pool)
+
+        for settings_in_guild in all_user_settings:
+            guild: Optional[discord.Guild] = self.bot.get_guild(settings_in_guild.guild_id)
+            if guild is None:
+                unfindable_guilds.append(str(settings_in_guild.guild_id))
+                continue
+
+            auto_name = "On" if settings_in_guild.name_change else "Off"
+            auto_role = "On" if settings_in_guild.role_change else "Off"
+            sys_role_enabled = settings_in_guild.system_role_enabled
+            sys_role_id = settings_in_guild.system_role
+
+            sys_role = guild.get_role(sys_role_id) if sys_role_id is not None else None
+
+            header = f"Guild: {guild.name}\nUser: {settings_in_guild.pk_sid}"
+            if not sys_role_enabled:
+                sys_role_msg = "Off"
+            elif sys_role_enabled and sys_role_id is not None and sys_role is None:
+                sys_role_msg = f"On, but unresolvable: {sys_role_id}"
+            elif sys_role_enabled and sys_role_id is not None and sys_role is not None:
+                sys_role_msg = f"On: Name: {sys_role.name}, ID: {sys_role.id}, Pos: {sys_role.position}, Created: {sys_role.created_at.strftime('%Y-%m-%d, %H:%M:%S %z')}"
+            else:
+                sys_role_msg = f"Toggle: {sys_role_enabled}, DBID: {sys_role_id}, Role: {sys_role}"
+
+            msg = f"Auto name: {auto_name}\nAuto Roles: {auto_role}\nSystem Role: {sys_role_msg}"
+            embed_entries.append((header, msg))
+
+        if len(unfindable_guilds) > 0:
+            msg = ', '.join(set(unfindable_guilds))
+            embed_entries.append(("Unresolvable Guilds:", msg))
+
+        page = FieldPages(ctx, entries=embed_entries, per_page=10)
+        page.embed.title = f"User Settings Debug.:"
+        await page.paginate()
+
+
+
 
     #
     # @commands.is_owner()
@@ -1649,15 +1731,16 @@ class AutoRoleChanger(commands.Cog):
 
     async def info(self, msg):
         """Info Logger"""
-        func = inspect.currentframe().f_back.f_code
-        log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
+        # func = inspect.currentframe().f_back.f_code
+        # log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
+        log.info(f"{msg}")
         # await self.bot.dLog.info(msg, header=f"[{__name__}]")
 
     async def warning(self, msg):
-        # log.warning(msg)
-        func = inspect.currentframe().f_back.f_code
-        log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
-        # await self.bot.dLog.warning(msg, header=f"[{__name__}]")
+        log.warning(msg)
+        # func = inspect.currentframe().f_back.f_code
+        # log.info(f"[{func.co_name}:{func.co_firstlineno}] {msg}")
+        await self.bot.dLog.warning(msg, header=f"[{__name__}]")
 
 
 def setup(bot):
