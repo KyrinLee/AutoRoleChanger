@@ -15,7 +15,6 @@ from discord.ext import tasks, commands
 
 import aiohttp
 
-# import db as sqliteDB
 import postgresDB as db
 
 import cogs.utils.pluralKit as pk
