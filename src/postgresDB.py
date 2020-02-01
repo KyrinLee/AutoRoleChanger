@@ -25,10 +25,8 @@ class DBPerformance:
     def __init__(self):
         self.time = defaultdict(list)
 
-
     def avg(self, key: str):
         return stats.mean(self.time[key])
-
 
     def all_avg(self):
         avgs = {}
@@ -46,6 +44,11 @@ class DBPerformance:
                 loop_stats['avg'] = -1
 
             try:
+                loop_stats['med'] = stats.median(value)
+            except stats.StatisticsError:
+                loop_stats['med'] = -1
+
+            try:
                 loop_stats['max'] = max(value)
             except stats.StatisticsError:
                 loop_stats['max'] = -1
@@ -54,16 +57,6 @@ class DBPerformance:
                 loop_stats['min'] = min(value)
             except stats.StatisticsError:
                 loop_stats['min'] = -1
-
-            try:
-                loop_stats['med'] = stats.median(value)
-            except stats.StatisticsError:
-                loop_stats['med'] = -1
-
-            try:
-                loop_stats['mod'] = stats.mode(value)
-            except stats.StatisticsError:
-                loop_stats['mod'] = -1
 
             loop_stats['calls'] = len(value)
 
