@@ -142,12 +142,13 @@ class Utilities(commands.Cog):
                       brief="Get an invite link.")
     async def invite(self, ctx: commands.Context):
         perm = discord.Permissions()
-        perm.manage_roles = True
-        perm.manage_nicknames = True
-        perm.read_messages = True
-        perm.send_messages = True
-        perm.add_reactions = True
-        perm.embed_links = True
+        perm.manage_roles = True  # Needed to assign/reassign/create/modify roles.
+        perm.manage_nicknames = True  # Needed to change users nicknames to match the current fronter
+        perm.read_messages = True  # Needed to see commands.
+        perm.send_messages = True  # Needed to respond to commands
+        perm.add_reactions = True  # Need for menu system
+        perm.embed_links = True  # Needed so link embed
+        perm.manage_messages = True  # Needed so we can remove the reactions from menus after a user clicks on a react & when the menu times out.
 
         link = discord.utils.oauth_url(self.bot.user.id, permissions=perm)
         await ctx.send(link)
