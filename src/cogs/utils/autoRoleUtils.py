@@ -21,16 +21,16 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-
-class GuildSettings(NamedTuple):
-    guild_id: int
-    name_change: bool
-    role_change: bool
-    log_channel: int
-    name_logging: bool
-    role_logging: bool
-    custom_roles: bool
-
+#
+# class GuildSettings(NamedTuple):
+#     guild_id: int
+#     name_change: bool
+#     role_change: bool
+#     log_channel: int
+#     name_logging: bool
+#     role_logging: bool
+#     custom_roles: bool
+#
 
 class BadRole(NamedTuple):
     role: str
@@ -157,7 +157,7 @@ async def parse_csv_roles(ctx: commands.Context, role_text: str, allowed_roles: 
             score = match[1] if match else None
 
             # Check to see if the type is role and if it is on the allowed list.
-            if isinstance(best_match, discord.Role) and allowed_roles.is_allowed(best_match):
+            if isinstance(best_match, discord.Role) and allowed_roles is not None and allowed_roles.is_allowed(best_match):
                 bad_role = BadRole(role=raw_role, best_match=best_match, score=score)  # Add the suggestion since it IS an allowed role.
             else:
                 bad_role = BadRole(role=raw_role, best_match=None, score=None)  # Don't recommend roles that Users can't set.
@@ -207,22 +207,29 @@ async def parse_csv_members(pool, discord_id: int, member_csv: str) -> Optional[
     for raw_member in raw_members:
         raw_member: str = raw_member.strip().lower()
 
-        potential_member = utils.find(lambda m: (m.member_name == raw_member or m.pk_mid == raw_member), db_members)
+        potential_member = utils.find(lambda m: (m.member_name.lower() == raw_member or m.pk_mid.lower() == raw_member), db_members)
         if potential_member is not None:
             valid_members.append(potential_member)
         else:
 
-            match = process.extractOne(raw_member, names_and_ids, score_cutoff=0)
-
+            match = process.extractOne(raw_member, names_and_ids, score_cutoff=50)
             # If we can't match, match will be None. Assign accordingly.
             best_match = match[0] if match else None
             score = match[1] if match else None
 
-            # Check to see if the type is DBMember.
-            if isinstance(best_match, DBMember):
-                invalid = InvalidMember(member_name=raw_member, best_match=best_match, score=score)  # Add the member
-            else:
-                invalid = InvalidMember(member_name=raw_member, best_match=None, score=None)  # This shouldnt be needed...
+            # member = None
+            # if best_match is not None:
+            #     for m in db_members:
+            #         member = m.match_mid_or_name(best_match)
+            #         if member is not None:
+            #             break
+
+            # member = utils.find(lambda m: (m.match_mid_or_name(best_match) is not None), db_members) if best_match is not None else None
+            # best_member_match = member or None
+
+            invalid = InvalidMember(member_name=raw_member, best_match=best_match, score=score)  # Add the member
+
+            # invalid = InvalidMember(member_name=raw_member, best_match=None, score=None)  # This shouldnt be needed...
 
             invalid_members.append(invalid)
 

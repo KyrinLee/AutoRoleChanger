@@ -322,6 +322,12 @@ class DBMember(NamedTuple):
     fronting: bool
     last_update: int
 
+    def match_mid_or_name(self, search_value) -> Optional:
+        if isinstance(search_value, str):
+            if search_value.lower() == self.member_name.lower() or search_value.lower() == self.pk_mid.lower():
+                return self
+        return None
+
 
 members_map = ["pk_sid", "pk_mid", "member_name", "fronting", "last_update"]
 @db_deco
@@ -774,6 +780,15 @@ async def DEBUG_get_every_user_settings(pool: asyncpg.pool.Pool) -> Optional[Lis
 
 # --- Guild settings --- #
 
+class GuildSettings(NamedTuple):
+    guild_id: int
+    name_change: bool
+    role_change: bool
+    log_channel: int
+    name_logging: bool
+    role_logging: bool
+    custom_roles: bool
+
 
 @db_deco
 async def add_guild_setting(pool: asyncpg.pool.Pool, guild_id: int, name_change: bool, role_change: bool, log_channel: Optional[int], name_logging: bool, role_logging: bool):
@@ -813,14 +828,14 @@ async def remove_guild_setting(pool: asyncpg.pool.Pool, guild_id: int):
 
 
 @db_deco
-async def get_guild_settings(pool: asyncpg.pool.Pool, guild_id: int):# -> Optional[DBGuildSettings]:
+async def get_guild_settings(pool: asyncpg.pool.Pool, guild_id: int) -> Optional[GuildSettings]:
     """Gets the guild_settings for a guild by the guildID."""
     async with pool.acquire() as conn:
         raw_row = await conn.fetchrow(" SELECT * from guilds where guild_id = $1", guild_id)
         if raw_row is None:
             return None
-
-        return raw_row
+        else:
+            return GuildSettings(**raw_row)
 
 
 # ---------- Table Migration ---------- #

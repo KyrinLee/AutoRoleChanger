@@ -50,12 +50,13 @@ class Page:
     LOG = logging.getLogger("PNBot.Page")
 
     def __init__(self, page_type: str, name: Optional[str] = None, body: Optional[str] = None,
-                 callback: Callable = do_nothing, additional: str = None, previous_page: Optional = None, timeout: int = 120.0):
+                 callback: Callable = do_nothing, additional: str = None, embed: Optional[discord.Embed] = None, previous_page: Optional = None, timeout: int = 120.0):
         # self.header_name = header_name
         # self.header_body = header_body
         self.name = name
         self.body = body
         self.additional = additional
+        self.embed = embed
         self.timeout = timeout
 
         self.page_type = page_type.lower()
@@ -87,17 +88,7 @@ class Page:
         author: discord.Member = ctx.author
         message: discord.Message = ctx.message
 
-        page_msg = ""
-        if self.name is not None:
-            page_msg += "**{}**\n".format(self.name)
-
-        if self.body is not None:
-            page_msg += "{}\n".format(self.body)
-
-        if self.additional is not None:
-            page_msg += "{}\n".format(self.additional)
-
-        page_message = await channel.send(page_msg)
+        page_message = await channel.send(self.construct_std_page_msg())
         self.page_message = page_message
 
         try:
@@ -134,18 +125,10 @@ class Page:
         author: discord.Member = ctx.author
         message: discord.Message = ctx.message
 
-        page_msg = ""
-        if self.name is not None:
-            page_msg += "**{}**\n".format(self.name)
-
-        if self.body is not None:
-            page_msg += "{}\n".format(self.body)
-
-        if self.additional is not None:
-            page_msg += "{}\n".format(self.additional)
-
-        page_message = await channel.send(page_msg)
-        self.page_message = page_message
+        if self.embed is None:
+            self.page_message = await channel.send(self.construct_std_page_msg())
+        else:
+            self.page_message = await channel.send(self.construct_std_page_msg(), embed=self.embed)
 
         def message_check(_msg: discord.Message):
             # self.LOG.info("Checking Message: Reacted Message: {}, orig message: {}".format(_reaction.message.id,
@@ -185,6 +168,10 @@ class Page:
         # self.page_message = page_message
         return page_msg
 
+    @staticmethod
+    async def cancel(ctx, self):
+        await self.remove()
+        await ctx.send("Canceled!")
 
     async def remove(self, user: bool = True, page: bool = True):
 
@@ -202,6 +189,64 @@ class Page:
                 await self.page_message.delete(delay=1)
         except Exception:
             pass
+
+
+# class StringPage(Page):
+#
+#     def __init__(self, cancel_btn=True, **kwrgs):
+#         """
+#         Callback signature: ctx: commands.Context, page: reactMenu.Page
+#         """
+#
+#         self.ctx = None
+#         self.match = None
+#         self.cancel_btn = cancel_btn
+#
+#         super().__init__(page_type="n/a", **kwrgs)
+#
+#     async def run(self, ctx: commands.Context):
+#         """
+#         Callback signature: page: reactMenu.Page
+#         """
+#         self.ctx = ctx
+#         channel: discord.TextChannel = ctx.channel
+#         author: discord.Member = ctx.author
+#         message: discord.Message = ctx.message
+#
+#         self.page_message: discord.Message = await channel.send(self.construct_std_page_msg())
+#
+        # def message_check(_msg: discord.Message):
+        #     # self.LOG.info("Checking Message: Reacted Message: {}, orig message: {}".format(_reaction.message.id,
+        #     #                                                                                 page_message.id))
+        #     return _msg.author == author and _msg.channel == channel
+#
+#         try:
+#
+#             done, pending = await asyncio.wait([
+#                 self.ctx.bot.wait_for('message'),
+#                 self.ctx.bot.wait_for('reaction_add')
+#             ], return_when=asyncio.FIRST_COMPLETED)
+#
+#             try:
+#                 stuff = done.pop().result()
+#             except Exception as e:
+#                 self.LOG.exception(e)
+#             # if any of the tasks died for any reason,
+#             #  the exception will be replayed here.
+#
+#             for future in pending:
+#                 future.cancel()  # we don't need these anymore
+#
+#
+#             # user_msg: discord.Message = await self.ctx.bot.wait_for('message', timeout=self.timeout, check=message_check)
+#             self.user_message = user_msg
+#             self.response = self.match = user_msg
+#             await self.remove()
+#             await self.callback(self)
+#
+#         except asyncio.TimeoutError:
+#             # await ctx.send("Command timed out.")
+#             await self.remove()
 
 
 class ReactPage(Page):
@@ -257,11 +302,6 @@ class ReactPage(Page):
                 # self.match = emoji
                 return True
         return False
-
-    @staticmethod
-    async def cancel(ctx, self):
-        await self.remove()
-        await ctx.send("Canceled!")
 
 
 class Menu:

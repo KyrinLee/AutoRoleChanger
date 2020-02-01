@@ -20,7 +20,7 @@ import postgresDB as db
 import cogs.utils.pluralKit as pk
 import cogs.utils.reactMenu as reactMenu
 from cogs.utils.paginator import FieldPages
-from cogs.utils.autoRoleUtils import parse_csv_roles, ParsedRoles, parse_csv_members, ParsedMembers, get_system_role, GuildSettings
+from cogs.utils.autoRoleUtils import parse_csv_roles, ParsedRoles, parse_csv_members, ParsedMembers, get_system_role
 import cogs.utils.autoRoleEmbeds as arcEmbeds
 
 from cogs.utils.dLogger import dLogger
@@ -349,7 +349,7 @@ class AutoRoleChanger(commands.Cog):
                 if current_discord_user is None:
                     continue  # Couldn't get member... Skip
 
-                guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, current_guild.id))
+                guild_settings = await db.get_guild_settings(self.pool, current_guild.id)
 
 
                 if guild_settings is not None and guild_settings.custom_roles:
@@ -494,9 +494,45 @@ class AutoRoleChanger(commands.Cog):
                 pass  # Not much that can be done...
 
     @commands.is_owner()
-    @commands.command(name="crash")
-    async def crash(self, ctx):
-        assert 1 == 0
+    @commands.command(name="test")
+    async def test(self, ctx):
+        #
+        # async def check_cb(ctx, page):
+        #     await ctx.send("The checkmark was clicked.")
+        #
+        # # , ("❌", reactMenu.do_nothing),
+        # testPage = reactMenu.ReactPage(("📄", "Page"), ("✅", check_cb), cancel_btn=False, name="Test Page", body="Click a react", timeout=45) #Page("bool", name="Test Page", body="Click a react", timeout=10)
+        # await testPage.run(ctx)
+        #
+        # if testPage.match == "Page":
+        #     await ctx.send("We got a page!")
+
+        def message_check(_msg: discord.Message):
+            return _msg.author == ctx.author and _msg.channel == ctx.channel
+
+        def react_check(_reaction: discord.Reaction, _user):
+            return _user == ctx.author and (str(_reaction.emoji) == '✅' or str(_reaction.emoji) == '❌')
+
+        msg = await ctx.send("Test")
+        await msg.add_reaction("✅")
+
+        done, pending = await asyncio.wait([
+            ctx.bot.wait_for('message', timeout=60, check=message_check),
+            ctx.bot.wait_for('reaction_add', timeout=60, check=react_check)
+        ], return_when=asyncio.FIRST_COMPLETED)
+
+        try:
+            stuff = done.pop().result()
+            log.info(f"{stuff}")
+        except asyncio.TimeoutError as e:
+            await ctx.send("Timed Out!")
+            # log.exception(e)
+        # if any of the tasks died for any reason,
+        #  the exception will be replayed here.
+
+        for future in pending:
+            log.info(f"{future}")
+            future.cancel()  # we don't need these anymore
 
     # ----- Help & About Commands ----- #
 
@@ -655,7 +691,6 @@ class AutoRoleChanger(commands.Cog):
 
         await ctx.send(embed=embed)
 
-
     @commands.guild_only()
     @commands.command(name="update", aliases=["sw"], brief="Update who is fronting.",
                       description="Cause the bot to check with PK to see who is fronting.\n"
@@ -683,7 +718,7 @@ class AutoRoleChanger(commands.Cog):
     async def list_member_roles(self, ctx: commands.Context):
         member_input = reactMenu.Page("str", name="List Roles",
                                       body="Please enter the name or ID of the System Member below:")
-        await member_input.run(self.bot, ctx)
+        await member_input.run(ctx)
         if member_input is not None:
             member = await db.get_member_fuzzy(self.pool, ctx.author.id, member_input.response.content)
             if member is not None:
@@ -768,14 +803,14 @@ class AutoRoleChanger(commands.Cog):
         async def run(self):
 
             self.allowable_roles = await db.get_allowable_roles(self.pool, self.ctx.guild.id)
-            if self.allowable_roles is None:
+            if len(self.allowable_roles.role_ids) == 0:
                 await self.ctx.send("There are no Auto changeable roles set up for this guild!")
                 return
 
-            remove_roles = reactMenu.Page("str", name="Remove roles from a member",
-                                          body="Remove any number of roles from one system member",
-                                          additional="Please enter a System Member below:",
-                                          callback=self.select_member_for_role)
+            remove_roles = reactMenu.Page("str", name="Remove roles from system members",
+                                          body="Remove any number of roles from any number of system members",
+                                          additional="Please enter a System Member or multiple System Members separated by commas below::",
+                                          callback=self.select_members_for_role)
 
             remove_roles_to_all_members = reactMenu.Page("str",
                                                          name="Remove roles from all your system members",
@@ -791,7 +826,7 @@ class AutoRoleChanger(commands.Cog):
 
         async def ask_to_go_back(self):
             back_to_menu = reactMenu.Page("bool", name=f"Would you like to go back to the menu?")
-            await back_to_menu.run(self.bot, self.ctx)
+            await back_to_menu.run(self.ctx)
             if back_to_menu.response:
                 await self.run()
 
@@ -823,7 +858,7 @@ class AutoRoleChanger(commands.Cog):
                                              name=f"Would you like to remove more roles from all system members?\n",
                                              # body="Click ✅ or ❌",
                                              callback=self.remove_role_from_all_members_cont)
-            await ask_to_remove_more.run(client, ctx)
+            await ask_to_remove_more.run(ctx)
 
         async def remove_role_from_all_members_cont(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                                     response: bool):
@@ -831,33 +866,38 @@ class AutoRoleChanger(commands.Cog):
                 remove_another_role = reactMenu.Page("str", name="Remove another role",
                                                      body="Please enter a role or multiple roles separated by commas below:",
                                                      callback=self.remove_role_from_all_members)
-                await remove_another_role.run(client, ctx)
+                await remove_another_role.run(ctx)
             else:
                 # await ctx.send("Finished removing roles!")
                 await self.ask_to_go_back()
 
         # --- Remove Roles to member prompts --- #
-        async def select_member_for_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
+        async def select_members_for_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                          response: discord.Message):
 
-            member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
-            if member is None:
-                await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID.")
-            else:
-                self.member = member
-                remove_roles = reactMenu.Page("str",
-                                              name=f"Remove roles from member {member['member_name']}",
-                                              body="Please enter a role or multiple roles separated by commas below: (Timesout in 300 seconds)",
-                                              callback=self.remove_role,
-                                              timeout=300)
-                await remove_roles.run(self.bot, ctx)
-
-        async def remove_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
-                              response: discord.Message):
-
-            if self.allowable_roles is None:
-                await self.ctx.send("There are no Auto changeable roles set up for this guild!")
+            members = await parse_csv_members(self.pool, ctx.author.id, response.content)
+            if members is None:
+                await ctx.send("Invalid input!")
+                await self.ask_to_go_back()
                 return
+
+            embed = arcEmbeds.select_members_embed(members, 'remove')
+            if len(members.good_members) == 0:
+                await ctx.send(embed=embed)
+                await self.ask_to_go_back()
+                return
+
+            self.member = members
+            await ctx.send(embed=embed)
+
+            remove_roles_from_members = reactMenu.Page("str",
+                                          body="Please enter a role or multiple roles separated by commas below: (Timesout in 300 seconds)",
+                                          callback=self.remove_roles_from_members,
+                                          timeout=300)
+            await remove_roles_from_members.run(ctx)
+
+        async def remove_roles_from_members(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
+                              response: discord.Message):
 
             role_text = response.content
             roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text, self.allowable_roles)
@@ -865,26 +905,29 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
 
-            for role in roles.good_roles:
-                await db.remove_role_from_member(self.pool, ctx.guild.id, self.member['pk_mid'], role.id)
+            members_msg = []
+            for member in self.member.good_members:
+                for role in roles.good_roles:
+                    await db.remove_role_from_member(self.pool, ctx.guild.id, member.pk_mid, role.id)
+                members_msg.append(member.member_name)
 
             # Construct embed to tell the user of the successes and failures.
             embed = arcEmbeds.removed_roles_from_some_members_embed(self.member, roles)
             await ctx.send(embed=embed)
 
             ask_to_remove_more = reactMenu.Page("bool",
-                                             name=f"Would you like to remove another role from {self.member['member_name']}?",
+                                             name=f"Would you like to remove more roles from the following members:\n{', '.join(members_msg)}",
                                              # body="Click ✅ or ❌",
                                              callback=self.remove_role_cont)
-            await ask_to_remove_more.run(client, ctx)
+            await ask_to_remove_more.run(ctx)
 
         async def remove_role_cont(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                    response: bool):
             if response:
                 remove_another_role = reactMenu.Page("str", name="Remove another role",
                                                   body="Please enter a role or multiple roles separated by commas below:",
-                                                  callback=self.remove_role)
-                await remove_another_role.run(client, ctx)
+                                                  callback=self.remove_roles_from_members)
+                await remove_another_role.run(ctx)
             else:
                 # await ctx.send("Finished removing roles!")
                 await self.ask_to_go_back()
@@ -910,8 +953,9 @@ class AutoRoleChanger(commands.Cog):
             self.allowable_roles: Optional[db.AllowableRoles] = None
 
         async def run(self):
+            #TODO: Display error if user is not registeed
             self.allowable_roles = await db.get_allowable_roles(self.pool, self.ctx.guild.id)
-            if self.allowable_roles is None:
+            if len(self.allowable_roles.role_ids) == 0:
                 await self.ctx.send("There are no Auto changeable roles set up for this guild!")
                 return
 
@@ -919,15 +963,10 @@ class AutoRoleChanger(commands.Cog):
                                                   body="List all Auto changeable roles.",
                                                   callback=self.list_allowable_roles)
 
-            add_roles = reactMenu.Page("str", name="Add roles to a member",
-                                       body="Add any number of roles to one system member",
-                                       additional="Please enter a System Member below:",
-                                       callback=self.select_member_for_role)
-
-            # add_roles_from_discord_user = reactMenu.Page("str", name="Apply current roles to a member",
-            #                            body="Makes the selected member have the roles currently on your discord account.",
-            #                            additional="Please enter a System Member below:",
-            #                            callback=self.select_member_for_current_roles)
+            add_roles = reactMenu.Page("str", name="Add roles to system members",
+                                       body="Add any number of roles to any number of system members",
+                                       additional="Please enter a System Member or multiple System Member separated by commas below::",
+                                       callback=self.select_members_for_roles)
 
             add_roles_to_all_members = reactMenu.Page("str",
                                      name="Add roles to all your members",
@@ -936,7 +975,7 @@ class AutoRoleChanger(commands.Cog):
                                      callback=self.add_role_to_all_members,
                                                       timeout=300)
 
-            menu = reactMenu.Menu(name="Add Role",
+            menu = reactMenu.Menu(name="Add Roles",
                                   body="Please select an option below by sending a message with the number",
                                   pages=[list_allowable_roles, add_roles, add_roles_to_all_members])#, add_roles_from_discord_user])
 
@@ -944,7 +983,7 @@ class AutoRoleChanger(commands.Cog):
 
         async def ask_to_go_back(self):
             back_to_menu = reactMenu.Page("bool", name=f"Would you like to go back to the menu?")
-            await back_to_menu.run(self.bot, self.ctx)
+            await back_to_menu.run(self.ctx)
             if back_to_menu.response:
                 await self.run()
 
@@ -984,7 +1023,7 @@ class AutoRoleChanger(commands.Cog):
             embed = arcEmbeds.added_roles_to_all_members_embed(roles)
             await ctx.send(embed=embed)
 
-            await ask_to_add_more.run(client, ctx)
+            await ask_to_add_more.run(ctx)
 
         async def add_role_to_all_members_cont(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                                response: bool):
@@ -993,81 +1032,37 @@ class AutoRoleChanger(commands.Cog):
                 add_another_role = reactMenu.Page("str", name="Add another role",
                                                   body="Please enter a role or multiple roles separated by commas below:",
                                                   callback=self.add_role_to_all_members)
-                await add_another_role.run(client, ctx)
+                await add_another_role.run(ctx)
             else:
                 # await ctx.send("Finished adding roles!")
                 await self.ask_to_go_back()
 
-        #
-        # async def select_member_for_current_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
-        #                                           response: discord.Message):
-        #
-        #     member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
-        #     if member is None:
-        #         await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID.")
-        #     else:
-        #         self.member = member
-        #
-        #         verify_prompt = reactMenu.Page("bool",
-        #                                    name=f"Are you sure you want to set all roles that are currently on your discord account onto {member['member_name']}? ",
-        #                                    # body="Click ✅ or ❌",
-        #                                    callback=self.verify_set_all_roles)
-        #         await verify_prompt.run(self.bot, ctx)
-        #
-        # async def verify_set_all_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
-        #                                response: bool):
-        #     if response:
-        #         # Todo: Implement
-        #         await ctx.send(f"Setting all roles")
-        #     else:
-        #         await ctx.send(f"Canceled!")
+        # --- Add Roles to members prompts --- #
+        async def select_members_for_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context, response: discord.Message):
 
-        # --- Add Roles to member prompts --- #
-        async def select_member_for_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context, response: discord.Message):
-
-            member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
-            if member is None:
-                await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID")
-            else:
-                self.member = member
-                add_roles = reactMenu.Page("str",
-                                           name=f"Add roles to member {member['member_name']}",
-                                           body="Please enter a role or multiple roles separated by commas below: (Timesout in 300 seconds)",
-                                           callback=self.add_role,
-                                           timeout=300)
-                await add_roles.run(self.bot, ctx)
-
-        # async def select_members_for_roles(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context, response: discord.Message):
-        #
-        #     #
-        #     # members = await db.get_members_by_discord_account(self.pool, ctx.author.id)
-        #
-        #     # member = await db.get_member_fuzzy(self.pool, ctx.author.id, response.content)
-        #     members = await parse_csv_members(self.pool, ctx.author.id, response.content)
-        #     if len(members) == 0:
-        #         await ctx.send(f"Could not find {response.content} in your system. Try using the 5 character Plural Kit ID")
-        #
-        #     else:
-        #
-        #         self.member = member
-        #         add_roles = reactMenu.Page("str",
-        #                                    name=f"Add roles to member {member['member_name']}",
-        #                                    body="Please enter a role or multiple roles separated by commas below: (Timesout in 300 seconds)",
-        #                                    callback=self.add_role,
-        #                                    timeout=300)
-        #         await add_roles.run(self.bot, ctx)
-
-        async def add_role(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
-                           response: discord.Message):
-
-            if self.allowable_roles is None:
-                await self.ctx.send("There are no Auto changeable roles set up for this guild!")
+            members = await parse_csv_members(self.pool, ctx.author.id, response.content)
+            if members is None:
+                await ctx.send("Invalid input!")
+                await self.ask_to_go_back()
                 return
 
-            ask_to_add_more = reactMenu.Page("bool",
-                                             name=f"Would you like to add another role to {self.member['member_name']}?",
-                                             # body="Click ✅ or ❌",
-                                             callback=self.add_role_cont)
+            embed = arcEmbeds.select_members_embed(members, 'add')
+            if len(members.good_members) == 0:
+                await ctx.send(embed=embed)
+                await self.ask_to_go_back()
+                return
+
+            self.member = members
+            await ctx.send(embed=embed)
+            add_roles_to_members = reactMenu.Page("str",
+                                       body="Please enter a role or multiple roles separated by commas below: (Timesout in 300 seconds)",
+                                       callback=self.add_roles_to_members,
+                                       timeout=300)
+
+            await add_roles_to_members.run(ctx)
+
+        async def add_roles_to_members(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
+                           response: discord.Message):
 
             role_text = response.content
             roles: Optional[ParsedRoles] = await parse_csv_roles(ctx, role_text, self.allowable_roles)
@@ -1075,25 +1070,34 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send("ERROR!!! Could not parse roles!")
                 return
 
-            for role in roles.good_roles:
-                await db.add_role_to_member(self.pool, ctx.guild.id, self.member['pk_mid'], self.member['pk_sid'], role.id)
+            members_msg = []
+            for member in self.member.good_members:
+                for role in roles.good_roles:
+                    await db.add_role_to_member(self.pool, ctx.guild.id, member.pk_mid, member.pk_sid, role.id)
+                members_msg.append(member.member_name)
 
             # Construct embed to tell the user of the successes and failures.
             embed = arcEmbeds.added_roles_to_some_members_embed(self.member, roles)
             await ctx.send(embed=embed)
 
-            await ask_to_add_more.run(client, ctx)
+            ask_to_add_more = reactMenu.Page("bool",
+                                             name=f"Would you like to add more roles to the following members:\n{', '.join(members_msg)}",
+                                             # body="Click ✅ or ❌",
+                                             callback=self.add_roles_to_members_cont)
+            await ask_to_add_more.run(ctx)
 
-        async def add_role_cont(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
+        async def add_roles_to_members_cont(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                             response: bool):
+
             if response:
                 add_another_role = reactMenu.Page("str", name="Add another role",
                                                   body="Please enter a role or multiple roles separated by commas below:",
-                                                  callback=self.add_role)
-                await add_another_role.run(client, ctx)
+                                                  callback=self.add_roles_to_members)
+                await add_another_role.run(ctx)
             else:
                 # await ctx.send("Finished adding roles!")
                 await self.ask_to_go_back()
+
 
     @is_authorized_guild()
     @commands.guild_only()
@@ -1119,7 +1123,7 @@ class AutoRoleChanger(commands.Cog):
 
             self.current_user_settings: Optional[db.UserSettings] = None
             self.system: Optional[db.DBSystem] = None
-            self.guild_settings = db.DBGuildSettings = None
+            self.guild_settings = db.GuildSettings = None
 
         async def run(self):
             self.system = await db.get_system_by_discord_account(self.pool, self.ctx.author.id)
@@ -1195,7 +1199,9 @@ class AutoRoleChanger(commands.Cog):
 
         async def system_role_toggle(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                      response: bool):
-            self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
+            # self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
+            self.guild_settings = await db.get_guild_settings(self.pool, self.ctx.guild.id)
+
 
             if self.guild_settings is None or not self.guild_settings.custom_roles:
                 await ctx.send(f"Error! The Custom system roles feature has not yet been activated in this server.")
@@ -1272,18 +1278,20 @@ class AutoRoleChanger(commands.Cog):
 
             self.allowable_roles: Optional[db.AllowableRoles] = None
             self.guild_settings = None
-            self.guild_settings: Optional[GuildSettings] = None
+            self.guild_settings: Optional[db.GuildSettings] = None
 
         async def run(self):
             self.allowable_roles = await db.get_allowable_roles(self.pool, self.ctx.guild.id)
-            self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
+            # self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
+            self.guild_settings = await db.get_guild_settings(self.pool, self.ctx.guild.id)
             if self.guild_settings is None:
                 # Somehow the guild doesnt have settings. Whoops. Add them now
                 await db.add_guild_setting(self.pool, self.ctx.guild.id, name_change=True, role_change=True,
                                            log_channel=None, name_logging=False, role_logging=False)
-                self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
+                self.guild_settings = await db.get_guild_settings(self.pool, self.ctx.guild.id)
+                # self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
 
-            system_role = "**On**" if self.guild_settings.custom_roles else "**Off**"
+            system_role = "On" if self.guild_settings.custom_roles else "Off"
 
             list_allowable_roles = reactMenu.Page(page_type="custom", name="List usable roles.",
                                                   body="Displays a list of all the roles users are allowed to use",
@@ -1514,7 +1522,7 @@ class AutoRoleChanger(commands.Cog):
     async def unregister(self, ctx: commands.Context):
         pk_system_id = await db.get_system_id_by_discord_account(self.pool, ctx.author.id)
         confirmation = reactMenu.Page('str', name="Confirm Deletion", body=f"Type `{pk_system_id['pk_sid']}` to unregister and delete all your data.")
-        await confirmation.run(self.bot, ctx)
+        await confirmation.run(ctx)
         if confirmation.response is not None:
             # TODO: Check Type
             if confirmation.response.content.lower() == pk_system_id['pk_sid']:
@@ -1522,7 +1530,6 @@ class AutoRoleChanger(commands.Cog):
                 await ctx.send("You have been removed from the system and all data has been deleted.")
                 return
         await ctx.send("Deletion Canceled!")
-
 
     @commands.command(hidden=True, aliases=["db_stats"])
     async def db_statistics(self, ctx: commands.Context):
