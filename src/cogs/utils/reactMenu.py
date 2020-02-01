@@ -2,7 +2,7 @@
 
 """
 import logging
-from typing import List, Union, Callable, Optional #, Literal
+from typing import List, Union, Callable, Optional, Tuple, Any  #, Literal
 from enum import Enum
 import asyncio
 
@@ -25,12 +25,22 @@ async def do_nothing(*args, **kwargs):
 class InvalidInput(Exception):
     pass
 
+
+
+class DiscordPermissionsError(Exception):
+    pass
+
+class AddReactionsError(DiscordPermissionsError):
+    def __init__(self):
+        super().__init__(f"Insufficient permissions to add reactions to user interface!\nPlease have an admin add the **Add Reactions** and **Read Message History** permissions to this bot.")
+
 # PageType = Literal[
 #     "str",
 #     "bool",
 #     "simple",
 #     "custom"
 # ]
+
 
 class Page:
     """
@@ -55,7 +65,8 @@ class Page:
         self.page_message: Optional[discord.Message] = None
         self.user_message: Optional[discord.Message] = None
 
-    async def run(self, client: commands.Bot, ctx: commands.Context):
+    async def run(self, ctx: commands.Context):
+        client = ctx.bot
 
         if self.page_type == "bool":
             await self.run_boolean(client, ctx)
@@ -96,7 +107,6 @@ class Page:
             await ctx.send(f"CRITICAL ERROR!!! \n{ctx.guild.me.name} does not have the `Add Reactions` permissions!. Please have an Admin fix this issue and try again.")
             raise e
 
-
         def react_check(_reaction: discord.Reaction, _user):
             self.LOG.info("Checking Reaction: Reacted Message: {}, orig message: {}".format(_reaction.message.id, page_message.id))
 
@@ -114,9 +124,6 @@ class Page:
                 await self.callback(self, client, ctx, False)
 
         except asyncio.TimeoutError:
-            await page_message.remove_reaction("❌", client.user)
-            await page_message.remove_reaction("✅", client.user)
-
             await self.remove()
 
     async def run_string(self, client: commands.Bot, ctx: commands.Context):
@@ -164,6 +171,21 @@ class Page:
         await self.remove()
         await self.callback(self, client, ctx)
 
+    def construct_std_page_msg(self) -> str:
+        page_msg = ""
+        if self.name is not None:
+            page_msg += "**{}**\n".format(self.name)
+
+        if self.body is not None:
+            page_msg += "{}\n".format(self.body)
+
+        if self.additional is not None:
+            page_msg += "{}\n".format(self.additional)
+
+        # self.page_message = page_message
+        return page_msg
+
+
     async def remove(self, user: bool = True, page: bool = True):
 
         if self.previous is not None:
@@ -180,6 +202,66 @@ class Page:
                 await self.page_message.delete(delay=1)
         except Exception:
             pass
+
+
+class ReactPage(Page):
+
+    def __init__(self, *buttons: Tuple[Union[discord.PartialEmoji, str], Union[Callable, Any]], cancel_btn=True, **kwrgs):
+        """
+        Callback signature: ctx: commands.Context, page: reactMenu.Page
+        """
+
+        self.buttons = list(buttons)
+        self.ctx = None
+        self.match = None
+
+        if cancel_btn:
+            self.buttons.append(("❌", self.cancel))
+
+        super().__init__(page_type="n/a", **kwrgs)
+
+    async def run(self, ctx: commands.Context):
+        self.ctx = ctx
+        self.page_message: discord.Message = await ctx.send(self.construct_std_page_msg())
+
+        for (reaction, _) in self.buttons:
+            try:
+                await self.page_message.add_reaction(reaction)
+            except discord.Forbidden:
+                raise AddReactionsError()
+
+        try:
+            payload = await self.ctx.bot.wait_for('raw_reaction_add', timeout=self.timeout, check=self.react_check)
+
+            if callable(self.match):
+                await self.match(self.ctx, self)
+            # else:
+            #     await ctx.send(f"clicked on: {self.match}")
+
+            await self.remove()
+        except asyncio.TimeoutError:
+            await self.remove()
+
+    def react_check(self, payload):
+        """Uses raw_reaction_add"""
+        if payload.user_id != self.ctx.author.id:
+            return False
+
+        if payload.message_id != self.page_message.id:
+            return False
+
+        to_check = str(payload.emoji)
+        for (emoji, func) in self.buttons:
+            if to_check == emoji:
+                self.match = func
+                # self.match = emoji
+                return True
+        return False
+
+    @staticmethod
+    async def cancel(ctx, self):
+        await self.remove()
+        await ctx.send("Canceled!")
 
 
 class Menu:
@@ -236,7 +318,7 @@ class Menu:
                 if response_number == 0:
                     await ctx.send("Canceled!")
                 else:
-                    await self.pages[response_number-1].run(bot, ctx)
+                    await self.pages[response_number-1].run(ctx)
             except (ValueError, InvalidInput):
                 await ctx.send("Invalid Option!")
 
