@@ -10,8 +10,8 @@ if TYPE_CHECKING:
     from cogs.utils.autoRoleUtils import ParsedRoles
     from postgresDB import AllowableRoles
 
-# ----- user Add/Remove Roles ----- #
 
+# ----- user Add/Remove Roles ----- #
 def removed_roles_from_all_members_embed(roles: 'ParsedRoles') -> discord.Embed:
 
     embed = discord.Embed(title=f"Removed {len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles) + len(roles.disallowed_roles)} roles from all members:")
@@ -61,20 +61,6 @@ def removed_roles_from_some_members_embed(member: discord.Member, roles: 'Parsed
                         value=disallowed_roles_msg)
     return embed
 
-
-def allowable_roles_embed(allowable_roles: Optional['AllowableRoles']) -> discord.Embed:
-    embed = discord.Embed()
-    embed.set_author(name=f"Auto changeable roles")
-
-    if allowable_roles is not None:
-        roles_msg = ", ".join([f"<@&{role_id}>" for role_id in allowable_roles.role_ids])
-    else:
-        roles_msg = "No roles are configured!"
-
-    embed.description = roles_msg
-    return embed
-
-
 def added_roles_to_all_members_embed(roles: 'ParsedRoles') -> discord.Embed:
 
     embed = discord.Embed(title=f"Added {len(roles.good_roles)} out of {len(roles.good_roles) + len(roles.bad_roles) + len(roles.disallowed_roles)} roles to all members:")
@@ -122,6 +108,20 @@ def added_roles_to_some_members_embed(member: discord.Member, roles: 'ParsedRole
                         value=disallowed_roles_msg)
 
     return embed
+
+
+def allowable_roles_embed(allowable_roles: Optional['AllowableRoles']) -> discord.Embed:
+    embed = discord.Embed()
+    embed.set_author(name=f"Auto changeable roles")
+
+    if allowable_roles is not None:
+        roles_msg = ", ".join([f"<@&{role_id}>" for role_id in allowable_roles.role_ids])
+    else:
+        roles_msg = "No roles are configured!"
+
+    embed.description = roles_msg
+    return embed
+
 
 
 
