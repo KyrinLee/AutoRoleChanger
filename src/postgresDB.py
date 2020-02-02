@@ -586,7 +586,7 @@ class AllowableRoles:
 
         return False
 
-    def allowed_intersection(self, other_roles: List[discord.Role]):
+    def allowed_intersection(self, other_roles: List[Union[discord.Role, discord.Object]]):
         """ returns list of allowed discord role objects """
         good_roles = []
         for other_role in other_roles:  # Loop through all the other roles.

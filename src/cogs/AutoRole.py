@@ -20,7 +20,8 @@ import postgresDB as db
 import cogs.utils.pluralKit as pk
 import cogs.utils.reactMenu as reactMenu
 from cogs.utils.paginator import FieldPages
-from cogs.utils.autoRoleUtils import parse_csv_roles, ParsedRoles, parse_csv_members, ParsedMembers, get_system_role
+from cogs.utils.autoRoleUtils import parse_csv_roles, ParsedRoles, parse_csv_members, ParsedMembers
+from cogs.utils.arcSystemRole import get_system_role
 import cogs.utils.autoRoleEmbeds as arcEmbeds
 
 from cogs.utils.dLogger import dLogger
@@ -153,7 +154,6 @@ class AutoRoleChanger(commands.Cog):
     #
     #     # await self.autochange_discord_user(discord_member, roles, current_fronters.members[0].proxied_name)
 
-
     async def update_system_members(self, force_member_update: bool = False, force_discord_update: bool = False, db_expiration_age: int = 86400,
                                     discord_member: discord.Member = None, ctx: Optional[commands.Context] = None,
                                     message: Optional[discord.Message] = None):
@@ -223,7 +223,7 @@ class AutoRoleChanger(commands.Cog):
             await db.update_member(self.pool, system_id, update_member.hid, update_member.name, fronting=fronting)
         await self.info(f"Updated members for {discord_member.name}")
 
-        # TODO: The below code May be broken and 'fake updating' members when it should not. Fix.
+        # TODO: Update the below to delete the members instead of "fake updating".
         # Clean up the DB and remove and remove any members that no longer exist (or are private at this point)
         # We are going to go off the stale_member data as this doesn't need to happen EVERY time.
         if stale_members is not None:
@@ -239,21 +239,6 @@ class AutoRoleChanger(commands.Cog):
                     await self.warning(f"Non-updating Stale member in {discord_member.name}'s system: {stale_member}. Pushing next update forward 24H")
                     await db.fake_member_update(self.pool, stale_member['pk_mid'])
 
-        # TODO: The below code seems to be broken and deletes members when it should not. Fix.
-        # Clean up the DB and remove and remove any members that no longer exist (or are private at this point)
-        # We are going to go off the stale_member data as this doesn't need to happen EVERY time.
-        # if stale_members is not None:
-        #     for stale_member in stale_members:
-        #
-        #         found = False
-        #         for updated_member in updated_members:
-        #             if stale_member == updated_member:
-        #                 found = True
-        #                 break
-        #         if not found:
-        #             await self.warning(f"DELETING member in {discord_member.name}'s system: {stale_member}")
-        #             await db.delete_member(self.pool, stale_member['pk_sid'], stale_member['pk_mid'])
-
         # Put the stale_fronters into a better format for logging...
         log_stale_fronters = [fronter.hid for fronter in stale_fronters] if stale_fronters is not None else None
         if force_discord_update or stale_fronters is None or stale_fronters != updated_fronters.members:
@@ -264,15 +249,6 @@ class AutoRoleChanger(commands.Cog):
                 await self.info(f"Update Foreced!!!")
 
             await self.autochange_discord_user_across_discord(discord_member, system_id, updated_fronters)
-            #
-            # roles = []
-            # for fronter in updated_fronters.members:  # FIXME: Chane from 1 to 0                             V
-            #     new_roles = await db.get_roles_for_member_by_guild(self.pool, fronter.hid, authorized_guilds[1])  # Force using only authorised guild for now.# discord_member.guild.id)
-            #     if new_roles is not None:
-            #         new_roles_ids = [discord.Object(id=role['role_id']) for role in new_roles]
-            #         roles.extend(new_roles_ids)
-            #
-            # await self.autochange_discord_user(discord_member, system_id, roles, updated_fronters)
         else:
             await self.info(f"Not updating roles: force_discord_update:{force_discord_update}, "
                             f"\nstale_fronters: {log_stale_fronters} "
@@ -315,17 +291,6 @@ class AutoRoleChanger(commands.Cog):
         user_roles = self.UserRoles(guild_id=guild_id, roles=roles)
         return user_roles
 
-    # async def get_new_roles_for_all_guilds(self, fronters: pk.Fronters) -> Optional[List[UserRoles]]:
-    #
-    #     if fronters is None:
-    #         return None
-    #
-    #     roles = []
-    #     for fronter in fronters.members:
-    #         roles_for_all_guilds = await db.get_roles_for_member(self.pool, fronter.hid)
-    #
-    #         for role
-
     async def autochange_discord_user_across_discord(self, discord_member: Union[discord.Member, discord.User],
                                                      pk_system_id: str, updated_fronters: Optional[pk.Fronters]):
 
@@ -350,7 +315,6 @@ class AutoRoleChanger(commands.Cog):
                     continue  # Couldn't get member... Skip
 
                 guild_settings = await db.get_guild_settings(self.pool, current_guild.id)
-
 
                 if guild_settings is not None and guild_settings.custom_roles:
                     # Get the current fronter, or None if now one is fronting
@@ -378,7 +342,6 @@ class AutoRoleChanger(commands.Cog):
 
                     guild_allowed_auto_roles = await db.get_allowable_roles(self.pool, user_settings_in_guild.guild_id)  # discord_member.guild.id)
 
-                    # TODO: I'm fairly sure this is the case already, but make sure that this removes disallowed roles from 'new_roles'
                     # Get the auto roles to set and get the roles we must keep
                     allowed_new_roles = guild_allowed_auto_roles.allowed_intersection(new_roles.roles) if new_roles else []
                     old_roles_to_keep = guild_allowed_auto_roles.disallowed_intersection(current_discord_user.roles)
@@ -481,7 +444,7 @@ class AutoRoleChanger(commands.Cog):
         event_type_update = "guild_member_update"  # Everything else. Currently unused.
 
         if before.nick != after.nick:
-            await self.info(f"{after.nick} changed their nickname from {before.nick}, attempting to call: update_only_fronters")
+            await self.warning(f"{after.nick} changed their nickname from {before.nick}, attempting to call: update_system_members (1 min timeout.)")
 
             # Update in nickname change if 5 minutes have passed since the last update.
 
@@ -1201,7 +1164,6 @@ class AutoRoleChanger(commands.Cog):
                                      response: bool):
             # self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
             self.guild_settings = await db.get_guild_settings(self.pool, self.ctx.guild.id)
-
 
             if self.guild_settings is None or not self.guild_settings.custom_roles:
                 await ctx.send(f"Error! The Custom system roles feature has not yet been activated in this server.")
