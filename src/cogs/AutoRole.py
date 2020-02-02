@@ -1123,7 +1123,7 @@ class AutoRoleChanger(commands.Cog):
 
             self.current_user_settings: Optional[db.UserSettings] = None
             self.system: Optional[db.DBSystem] = None
-            self.guild_settings = db.GuildSettings = None
+            self.guild_settings: Optional[db.GuildSettings] = None
 
         async def run(self):
             self.system = await db.get_system_by_discord_account(self.pool, self.ctx.author.id)
