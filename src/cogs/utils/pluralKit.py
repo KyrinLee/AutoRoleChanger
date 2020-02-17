@@ -109,9 +109,14 @@ class System:
     created: str
     tz: str
     api_token: str
+    description_privacy: Optional[str]
+    member_list_privacy: Optional[str]
+    front_privacy: Optional[str]
+    front_history_privacy: Optional[str]
 
 
-    def __init__(self, id, created, name=None, description=None, tag=None, avatar_url=None, tz=None):
+    def __init__(self, id, created, name=None, description=None, tag=None, avatar_url=None, tz=None, 
+                 description_privacy=None, member_list_privacy=None, front_privacy=None, front_history_privacy=None):
         self.hid = id
         self.created = created
         self.name = name
@@ -120,6 +125,10 @@ class System:
         self.avatar_url = avatar_url
         self.tz = tz
         self.api_token = None
+        self.description_privacy = description_privacy
+        self.member_list_privacy = member_list_privacy
+        self.front_privacy = front_privacy
+        self.front_history_privacy = front_history_privacy
 
 
     def __repr__(self):
@@ -196,9 +205,10 @@ class Member:
     suffix: str
     created: datetime
     sid: str
+    privacy: str
 
     def __init__(self, keep_proxy=None, proxy_tags=None, id=None, name=None, display_name=None, system=None, created=None, color=None,
-                 avatar_url=None, birthday=None, pronouns=None, description=None, prefix=None, suffix=None, sid=None):
+                 avatar_url=None, birthday=None, pronouns=None, description=None, prefix=None, suffix=None, sid=None, privacy=None):
         self.hid = id
         self.name = name
         self.display_name = display_name
@@ -214,6 +224,7 @@ class Member:
         self.proxy_tags = []
         self.keep_proxy = keep_proxy
         self.sid = sid
+        self.privacy = privacy
         if proxy_tags is not None:
             for proxy_tag in proxy_tags:
                 self.proxy_tags.append(ProxyTag(proxy_tag['prefix'], proxy_tag['suffix']))
