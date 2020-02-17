@@ -271,7 +271,6 @@ class AutoRoleChanger(commands.Cog):
 
         return updated_system
 
-
     class UserRoles(NamedTuple):
         guild_id: int
         roles: List[discord.Object]
@@ -316,7 +315,8 @@ class AutoRoleChanger(commands.Cog):
 
                 guild_settings = await db.get_guild_settings(self.pool, current_guild.id)
 
-                if guild_settings is not None and guild_settings.custom_roles:
+                # Check if we should update the custom system role, and do so if needed
+                if guild_settings is not None and guild_settings.custom_roles and user_settings_in_guild.system_role_enabled:
                     # Get the current fronter, or None if now one is fronting
                     current_fronter = updated_fronters.members[0] if len(updated_fronters.members) > 0 else None
 
@@ -335,6 +335,7 @@ class AutoRoleChanger(commands.Cog):
 
                     await current_discord_user.add_roles(system_role)  # Todo: Maybe add this into get_system_role? Also check if they have it first?
 
+                # Check if user has role changing enabled. Change roles if enabled
                 if user_settings_in_guild.role_change:
                     new_roles = await self.get_new_roles(updated_fronters, user_settings_in_guild.guild_id)
 
@@ -356,6 +357,7 @@ class AutoRoleChanger(commands.Cog):
                     except discord.errors.Forbidden:
                         await self.info(f"Could not set roles: {roles_to_set} on {current_discord_user.display_name}")
 
+                # Check if user has name changing enabled. Change name if enabled
                 if user_settings_in_guild.name_change and len(updated_fronters.members) > 0:  # TODO: Add option to set system name as nickname when no one is fronting.
 
                     system_tag = updated_system.tag
@@ -1162,7 +1164,6 @@ class AutoRoleChanger(commands.Cog):
 
         async def system_role_toggle(self, page: reactMenu.Page, client: commands.bot, ctx: commands.Context,
                                      response: bool):
-            # self.guild_settings = GuildSettings(** await db.get_guild_settings(self.pool, self.ctx.guild.id))
             self.guild_settings = await db.get_guild_settings(self.pool, self.ctx.guild.id)
 
             if self.guild_settings is None or not self.guild_settings.custom_roles:
